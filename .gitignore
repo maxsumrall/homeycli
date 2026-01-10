@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+# Commit package-lock.json for reproducible installs
+# (CI uses npm ci)
+yarn.lock
+
+# Session/config cache
+.homey/
+*.session.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test
+coverage/
+.nyc_output/
