@@ -56,10 +56,12 @@ Default is `HOMEY_MODE=auto`:
 
 ```bash
 # 1) discover local address (mDNS, best effort)
-homeycli auth discover-local --save  # if multiple candidates: add --pick <n> or --homey-id <id>
+homeycli auth discover-local --json
+homeycli auth discover-local --save --pick 1
 
 # 2) save local API key (address is reused if already stored)
 echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
+# or interactive (hidden input): homeycli auth set-local --prompt
 
 # (or set address explicitly)
 echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
@@ -69,6 +71,7 @@ echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --std
 
 ```bash
 echo "CLOUD_TOKEN" | homeycli auth set-token --stdin
+# or interactive (hidden input): homeycli auth set-token --prompt
 ```
 
 #### Force a mode (optional)
@@ -257,6 +260,21 @@ Notes:
 - The workflow installs `clawdhub` pinned (see `CLAWDHUB_CLI_VERSION` in `.github/workflows/publish-clawdhub.yml`).
 - The publish step is implemented in `scripts/publish-clawdhub.sh`.
 - The default publish slug is taken from `SKILL.md` frontmatter (`name:`). You can override it via workflow inputs.
+
+### Releasing (version bumps)
+
+Tag pushes (`v*`) are treated as releases. The publish script enforces that the git tag version matches `package.json`.
+
+Recommended:
+
+```bash
+npm run release:patch   # or release:minor / release:major
+
+# pushes the release commit + tag (vX.Y.Z)
+git push origin HEAD --follow-tags
+```
+
+This triggers the `publish-clawdhub` workflow.
 
 ## Security (prevent secrets in git)
 

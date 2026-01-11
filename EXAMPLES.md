@@ -8,11 +8,15 @@ Pick **local** (LAN/VPN) or **cloud** (remote/headless).
 
 ```bash
 # Local mode (LAN/VPN)
-homeycli auth discover-local --save
+homeycli auth discover-local --json
+homeycli auth discover-local --save --pick 1
+
 echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
+# or interactive (hidden input): homeycli auth set-local --prompt
 
 # Cloud mode (remote/headless)
 echo "CLOUD_TOKEN" | homeycli auth set-token --stdin
+# or interactive (hidden input): homeycli auth set-token --prompt
 
 # Check what will be used
 homeycli auth status

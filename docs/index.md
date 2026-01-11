@@ -20,14 +20,17 @@ chmod +x bin/homeycli.js
 Local mode (LAN/VPN):
 
 ```bash
-homeycli auth discover-local --save  # if multiple candidates: add --pick <n> or --homey-id <id>
+homeycli auth discover-local --save --pick 1
+
 echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
+# or interactive (hidden input): homeycli auth set-local --prompt
 ```
 
 Cloud mode (remote/headless):
 
 ```bash
 echo "CLOUD_TOKEN" | homeycli auth set-token --stdin
+# or interactive (hidden input): homeycli auth set-token --prompt
 ```
 
 Check status:

@@ -74,11 +74,16 @@ homeycli auth status --json
 Save local Homey settings (recommended when the agent runs on your home network):
 
 ```bash
-# 1) discover + store the address (best effort via mDNS)
-homeycli auth discover-local --save   # if multiple candidates: add --pick <n> or --homey-id <id>
+# 1) discover local address (best effort via mDNS)
+homeycli auth discover-local --json
 
-# 2) store local API key (address is reused if already stored)
+# save it (if multiple candidates, pick one)
+homeycli auth discover-local --save --pick 1
+# or: homeycli auth discover-local --save --homey-id <id>
+
+# 2) store local API key (address is reused from config if already discovered)
 echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
+# or interactive (hidden input): homeycli auth set-local --prompt
 
 # (or set address explicitly)
 echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
@@ -90,6 +95,7 @@ Save cloud token (recommended for VPS/headless hosting):
 
 ```bash
 echo "CLOUD_TOKEN" | homeycli auth set-token --stdin
+# or interactive (hidden input): homeycli auth set-token --prompt
 ```
 
 ### Mode selection
