@@ -6,7 +6,7 @@ When `--json` is set, errors are printed as JSON to stdout:
 { "error": { "code": "AMBIGUOUS", "message": "...", "details": { "candidates": [ ... ] } } }
 ```
 
-When `--json` is not set, errors go to stderr in a Unix-style format.
+When `--json` is not set, errors go to stderr in a Unix-style format (including the error `code` when available).
 
 ## Exit codes
 

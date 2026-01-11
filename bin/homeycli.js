@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
+const readline = require('readline');
+
 const commands = require('../lib/commands');
+const { cliError } = require('../lib/errors');
 
 const pkg = require('../package.json');
 
@@ -14,7 +17,7 @@ program
 program
   .option('--json', 'Output JSON (stdout) instead of formatted text')
   .option('--raw', 'Include raw Homey API objects in JSON output (very verbose)')
-  .option('--threshold <n>', 'Fuzzy match threshold (default: 5)', (v) => parseInt(v, 10));
+  .option('--threshold <n>', 'Fuzzy match threshold', (v) => parseInt(v, 10), 5);
 
 function exitCodeForError(err) {
   switch (err?.code) {
@@ -44,7 +47,11 @@ function printError(err, opts) {
     return;
   }
 
-  console.error(`error: ${message}`);
+  console.error(`error[${code}]: ${message}`);
+
+  if (details?.help) {
+    console.error(`help: ${details.help}`);
+  }
 
   const candidates = details?.candidates;
   if (Array.isArray(candidates) && candidates.length) {
@@ -82,6 +89,42 @@ function commandOpts(maybeCommandOrOpts) {
   return {};
 }
 
+async function readAllStdin() {
+  return await new Promise((resolve, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', reject);
+  });
+}
+
+async function promptHidden(question) {
+  if (!process.stdin.isTTY) {
+    throw cliError('INVALID_VALUE', 'cannot prompt for token (stdin is not a TTY). Use --stdin instead.');
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+    terminal: true,
+  });
+
+  // Print the prompt, then hide typed characters (print nothing while user types).
+  rl.output.write(question);
+  rl._writeToOutput = function _writeToOutput() {};
+
+  return await new Promise((resolve) => {
+    rl.question('', (answer) => {
+      rl.close();
+      rl.output.write('\n');
+      resolve(answer);
+    });
+  });
+}
+
 // Devices command
 program
   .command('devices')
@@ -99,7 +142,7 @@ program
       if (action === 'off') return commands.controlDevice(nameOrId, 'off', opts);
       if (action === 'set') {
         if (!capability || value === undefined) {
-          throw new Error('usage: device <nameOrId> set <capability> <value>');
+          throw cliError('INVALID_VALUE', 'usage: homeycli device <nameOrId> set <capability> <value>');
         }
         return commands.setCapability(nameOrId, capability, value, opts);
       }
@@ -110,7 +153,10 @@ program
       if (action === 'values') return commands.getDeviceValues(nameOrId, opts);
       if (action === 'inspect') return commands.inspectDevice(nameOrId, opts);
 
-      throw new Error('invalid action. Use: on, off, set <capability> <value>, get [capability], values, inspect');
+      throw cliError(
+        'INVALID_VALUE',
+        'invalid device action. Use: on, off, set <capability> <value>, get [capability], values, inspect'
+      );
     })
   );
 
@@ -127,7 +173,7 @@ program
   .action((action, nameOrId) =>
     runOrExit((opts) => {
       if (action === 'trigger') return commands.triggerFlow(nameOrId, opts);
-      throw new Error('invalid action. Use: trigger');
+      throw cliError('INVALID_VALUE', 'invalid flow action. Use: trigger');
     })
   );
 
@@ -154,11 +200,29 @@ program
 program
   .command('auth <action> [token]')
   .description('Authentication helpers (set-token, status)')
-  .action((action, token) =>
-    runOrExit((opts) => {
-      if (action === 'set-token') return commands.authSetToken(token, opts);
-      if (action === 'status') return commands.authStatus(opts);
-      throw new Error('invalid auth action. Use: set-token <token>, status');
+  .option('--stdin', 'Read token from stdin (recommended; avoids shell history)')
+  .option('--prompt', 'Prompt for token (hidden input)')
+  .action((action, token, maybeCmd) =>
+    runOrExit(async (opts) => {
+      const merged = { ...opts, ...commandOpts(maybeCmd) };
+
+      if (action === 'set-token') {
+        if (merged.stdin && merged.prompt) {
+          throw cliError('INVALID_VALUE', 'use either --stdin or --prompt (not both)');
+        }
+
+        let t = token;
+        if (merged.stdin) {
+          t = (await readAllStdin()).trim();
+        } else if (merged.prompt) {
+          t = String(await promptHidden('Homey token: ')).trim();
+        }
+        return commands.authSetToken(t, merged);
+      }
+
+      if (action === 'status') return commands.authStatus(merged);
+
+      throw cliError('INVALID_VALUE', 'invalid auth action. Use: set-token [--stdin|--prompt] <token>, status');
     })
   );
 

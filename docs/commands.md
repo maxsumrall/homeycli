@@ -31,7 +31,14 @@ homeycli device <nameOrId> on --json
 homeycli device <nameOrId> off --json
 ```
 
-If `<nameOrId>` matches more than one device, the command fails with `AMBIGUOUS` and returns candidate IDs.
+Resolution order for `<nameOrId>` is deterministic:
+
+1. direct id match
+2. exact name match (case-insensitive)
+3. substring match (case-insensitive)
+4. fuzzy match (Levenshtein) if the best match is unique and within `--threshold` (default: 5)
+
+If `<nameOrId>` matches more than one device at any step, the command fails with `AMBIGUOUS` and returns candidate IDs.
 
 ## flows
 
@@ -46,6 +53,8 @@ homeycli flows --match "good" --json
 homeycli flow trigger <nameOrId> --json
 ```
 
+`<nameOrId>` resolution uses the same deterministic rules as devices (id → exact → substring → fuzzy within `--threshold`).
+
 ## zones
 
 ```bash
@@ -54,7 +63,15 @@ homeycli zones --json
 
 ## auth
 
+Recommended (safe; avoids shell history):
+
 ```bash
-homeycli auth set-token "TOKEN"
+echo "TOKEN" | homeycli auth set-token --stdin
 homeycli auth status --json
+```
+
+Interactive (hidden input):
+
+```bash
+homeycli auth set-token --prompt
 ```

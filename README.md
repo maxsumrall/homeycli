@@ -2,6 +2,7 @@
 
 Docs: https://maxsumrall.github.io/homeycli/
 
+Agent integration contract (stable JSON fields/errors): `docs/output.md`
 
 Control Athom Homey smart home devices from the command line using Cloud API with Bearer token authentication.
 
@@ -38,7 +39,11 @@ export HOMEY_TOKEN="your-bearer-token-here"
 
 Or save to config file (recommended for tools/agents):
 ```bash
-homeycli auth set-token "your-token-here"
+# recommended: read token from stdin (avoids shell history)
+echo "your-token-here" | homeycli auth set-token --stdin
+
+# or interactive hidden prompt
+homeycli auth set-token --prompt
 
 # check auth status (never prints the token)
 homeycli auth status

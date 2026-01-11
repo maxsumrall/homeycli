@@ -17,9 +17,17 @@ chmod +x bin/homeycli.js
 
 ## Auth
 
+Recommended (safe; avoids shell history):
+
 ```bash
-homeycli auth set-token "YOUR_TOKEN"
+echo "YOUR_TOKEN" | homeycli auth set-token --stdin
 homeycli auth status --json
+```
+
+Interactive (hidden input):
+
+```bash
+homeycli auth set-token --prompt
 ```
 
 ## Recommended: snapshot
@@ -47,3 +55,5 @@ homeycli flow trigger "Good Night" --json
 ```
 
 See the README for more.
+
+For agent integrations, also see: `docs/output.md` (stable JSON contract).
