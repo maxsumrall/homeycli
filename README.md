@@ -56,7 +56,7 @@ Default is `HOMEY_MODE=auto`:
 
 ```bash
 # 1) discover local address (mDNS, best effort)
-homeycli auth discover-local --save
+homeycli auth discover-local --save  # if multiple candidates: add --pick <n> or --homey-id <id>
 
 # 2) save local API key (address is reused if already stored)
 echo "LOCAL_API_KEY" | homeycli auth set-local --stdin

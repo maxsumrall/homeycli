@@ -68,7 +68,7 @@ Exit codes are documented in `docs/errors.md`.
 ```json
 {
   "discovered": true,
-  "candidates": [{ "address": "http://192.168.1.50", "homeyId": "...", "host": "192.168.1.50", "port": 80 }]
+  "candidates": [{ "index": 1, "address": "http://192.168.1.50", "homeyId": "...", "host": "192.168.1.50", "port": 80 }]
 }
 ```
 

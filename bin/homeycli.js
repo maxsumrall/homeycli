@@ -204,6 +204,8 @@ program
   .option('--prompt', 'Prompt for token (hidden input)')
   .option('--address <url>', 'Homey local address (e.g. http://192.168.1.50)')
   .option('--save', 'Save discovered local address to config (discover-local)')
+  .option('--pick <n>', 'Pick candidate by index (discover-local --save)', (v) => parseInt(v, 10))
+  .option('--homey-id <id>', 'Pick candidate by Homey id (discover-local --save)')
   .option('--timeout <ms>', 'Discovery timeout in ms (discover-local)', (v) => parseInt(v, 10))
   .action((action, value, maybeCmd) =>
     runOrExit(async (opts) => {
@@ -250,7 +252,7 @@ program
 
       throw cliError(
         'INVALID_VALUE',
-        'invalid auth action. Use: status, discover-local [--save] [--timeout <ms>], set-local [--address <url>] [--stdin|--prompt|<token>], set-token [--stdin|--prompt|<token>], set-mode <auto|local|cloud>, clear-local, clear-token'
+        'invalid auth action. Use: status, discover-local [--save] [--pick <n>|--homey-id <id>] [--timeout <ms>], set-local [--address <url>] [--stdin|--prompt|<token>], set-token [--stdin|--prompt|<token>], set-mode <auto|local|cloud>, clear-local, clear-token'
       );
     })
   );

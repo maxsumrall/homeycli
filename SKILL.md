@@ -22,7 +22,7 @@ Requires Node.js >= 18.
    **Local (recommended when the agent runs on your home network):**
 
    ```bash
-   homeycli auth discover-local --save
+   homeycli auth discover-local --save  # if multiple candidates: add --pick <n> or --homey-id <id>
    echo "<LOCAL_API_KEY>" | homeycli auth set-local --stdin
    ```
 
