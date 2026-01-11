@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 
 const { execSync } = require('node:child_process');
+const fs = require('node:fs');
 
 function run(cmd, opts = {}) {
   return execSync(cmd, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
+}
+
+function readPkgVersion() {
+  const raw = fs.readFileSync('package.json', 'utf8');
+  const pkg = JSON.parse(raw);
+  return String(pkg.version || '').trim();
 }
 
 function runInherit(cmd) {
@@ -38,7 +45,7 @@ try {
 
 let current;
 try {
-  current = run('node -p "require(\"./package.json\").version"');
+  current = readPkgVersion();
 } catch (e) {
   fail(`failed to read package.json version: ${e.message}`);
 }
@@ -53,7 +60,7 @@ try {
   fail(`npm version failed: ${e.message}`);
 }
 
-const next = run('node -p "require(\"./package.json\").version"');
+const next = readPkgVersion();
 console.log(`\nVersion bumped: ${current} -> ${next}`);
 
 console.log('\nNext steps:');
