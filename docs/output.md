@@ -63,6 +63,15 @@ Exit codes are documented in `docs/errors.md`.
 }
 ```
 
+### `homeycli auth discover-local ... --json`
+
+```json
+{
+  "discovered": true,
+  "candidates": [{ "address": "http://192.168.1.50", "homeyId": "...", "host": "192.168.1.50", "port": 80 }]
+}
+```
+
 ### `homeycli auth set-local ... --json` (local)
 
 ```json

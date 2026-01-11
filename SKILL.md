@@ -22,7 +22,8 @@ Requires Node.js >= 18.
    **Local (recommended when the agent runs on your home network):**
 
    ```bash
-   echo "<LOCAL_API_KEY>" | homeycli auth set-local --address http://<homey-ip> --stdin
+   homeycli auth discover-local --save
+   echo "<LOCAL_API_KEY>" | homeycli auth set-local --stdin
    ```
 
    **Cloud (recommended for VPS/headless hosting):**

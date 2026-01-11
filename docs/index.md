@@ -20,7 +20,8 @@ chmod +x bin/homeycli.js
 Local mode (LAN/VPN):
 
 ```bash
-echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
+homeycli auth discover-local --save
+echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
 ```
 
 Cloud mode (remote/headless):

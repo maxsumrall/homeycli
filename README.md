@@ -55,6 +55,13 @@ Default is `HOMEY_MODE=auto`:
 #### Configure local
 
 ```bash
+# 1) discover local address (mDNS, best effort)
+homeycli auth discover-local --save
+
+# 2) save local API key (address is reused if already stored)
+echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
+
+# (or set address explicitly)
 echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
 ```
 

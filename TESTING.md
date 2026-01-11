@@ -23,7 +23,9 @@ npm install
 chmod +x bin/homeycli.js
 
 # Configure local mode (LAN/VPN)
-echo "LOCAL_API_KEY" | ./bin/homeycli.js auth set-local --address http://<homey-ip> --stdin
+./bin/homeycli.js auth discover-local --save
+
+echo "LOCAL_API_KEY" | ./bin/homeycli.js auth set-local --stdin
 
 # OR configure cloud mode (remote/headless)
 echo "CLOUD_TOKEN" | ./bin/homeycli.js auth set-token --stdin

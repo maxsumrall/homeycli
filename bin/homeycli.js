@@ -203,6 +203,8 @@ program
   .option('--stdin', 'Read token from stdin (recommended; avoids shell history)')
   .option('--prompt', 'Prompt for token (hidden input)')
   .option('--address <url>', 'Homey local address (e.g. http://192.168.1.50)')
+  .option('--save', 'Save discovered local address to config (discover-local)')
+  .option('--timeout <ms>', 'Discovery timeout in ms (discover-local)', (v) => parseInt(v, 10))
   .action((action, value, maybeCmd) =>
     runOrExit(async (opts) => {
       const merged = { ...opts, ...commandOpts(maybeCmd) };
@@ -215,6 +217,10 @@ program
         if (merged.stdin) return (await readAllStdin()).trim();
         if (merged.prompt) return String(await promptHidden(`${kindLabel} token: `)).trim();
         return value;
+      }
+
+      if (action === 'discover-local') {
+        return commands.authDiscoverLocal(merged);
       }
 
       if (action === 'set-token') {
@@ -244,7 +250,7 @@ program
 
       throw cliError(
         'INVALID_VALUE',
-        'invalid auth action. Use: status, set-local --address <url> [--stdin|--prompt|<token>], set-token [--stdin|--prompt|<token>], set-mode <auto|local|cloud>, clear-local, clear-token'
+        'invalid auth action. Use: status, discover-local [--save] [--timeout <ms>], set-local [--address <url>] [--stdin|--prompt|<token>], set-token [--stdin|--prompt|<token>], set-mode <auto|local|cloud>, clear-local, clear-token'
       );
     })
   );

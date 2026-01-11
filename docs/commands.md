@@ -74,6 +74,13 @@ homeycli auth status --json
 Save local Homey settings (recommended when the agent runs on your home network):
 
 ```bash
+# 1) discover + store the address (best effort via mDNS)
+homeycli auth discover-local --save
+
+# 2) store local API key (address is reused if already stored)
+echo "LOCAL_API_KEY" | homeycli auth set-local --stdin
+
+# (or set address explicitly)
 echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
 ```
 
