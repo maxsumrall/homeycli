@@ -34,18 +34,42 @@ Exit codes are documented in `docs/errors.md`.
 
 ```json
 {
-  "tokenPresent": true,
-  "source": "env",
-  "path": "/Users/.../.homey/config.json"
+  "modeWanted": "auto",
+  "modeWantedSource": "config",
+  "modeSelected": "local",
+  "path": "/Users/.../.homey/config.json",
+  "local": {
+    "addressPresent": true,
+    "tokenPresent": true,
+    "address": "http://192.168.1.50",
+    "addressSource": "config",
+    "tokenSource": "config"
+  },
+  "cloud": {
+    "tokenPresent": true,
+    "tokenSource": "config"
+  }
 }
 ```
 
-### `homeycli auth set-token ... --json`
+### `homeycli auth set-token ... --json` (cloud)
 
 ```json
 {
   "saved": true,
+  "kind": "cloud",
   "source": "config",
+  "path": "/Users/.../.homey/config.json"
+}
+```
+
+### `homeycli auth set-local ... --json` (local)
+
+```json
+{
+  "saved": true,
+  "kind": "local",
+  "address": "http://192.168.1.50",
   "path": "/Users/.../.homey/config.json"
 }
 ```
@@ -55,13 +79,20 @@ Exit codes are documented in `docs/errors.md`.
 ```json
 {
   "name": "Homey",
-  "platform": "...",
-  "platformVersion": "...",
+  "platform": "local|cloud|...",
+  "platformVersion": 2,
   "hostname": "...",
   "cloudId": "...",
-  "connected": true
+  "homeyId": "...",
+  "connected": true,
+  "connectionMode": "local|cloud",
+  "address": "http://192.168.1.50" 
 }
 ```
+
+Notes:
+- `address` is only present in `local` mode.
+- `cloudId` is kept for backwards compatibility; prefer `homeyId`.
 
 ### `homeycli zones --json`
 

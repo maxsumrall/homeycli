@@ -1,7 +1,7 @@
 {
   "name": "@clawdhub/homey",
   "version": "1.0.1",
-  "description": "Control Athom Homey smart home devices via Cloud API",
+  "description": "Control Athom Homey smart home devices via local (LAN/VPN) or cloud APIs", 
   "main": "bin/homeycli.js",
   "bin": {
     "homeycli": "./bin/homeycli.js"

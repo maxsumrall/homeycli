@@ -5,7 +5,9 @@ How to test the Homey CLI skill.
 ## Prerequisites
 
 1. **Homey Device** - You need access to a physical Homey Pro, Homey Cloud, or Homey Bridge
-2. **Bearer Token** - Get from https://tools.developer.homey.app/api/clients
+2. **Auth** - Either:
+   - **Local API key** from the Homey Web App (LAN/VPN), or
+   - **Cloud token (PAT)** from https://tools.developer.homey.app/api/clients
 3. **Dependencies Installed** - Run `npm install` in this directory
 
 ## Setup
@@ -20,8 +22,11 @@ npm install
 # Make CLI executable (if not already done)
 chmod +x bin/homeycli.js
 
-# Set your token
-export HOMEY_TOKEN="your-bearer-token-here"
+# Configure local mode (LAN/VPN)
+echo "LOCAL_API_KEY" | ./bin/homeycli.js auth set-local --address http://<homey-ip> --stdin
+
+# OR configure cloud mode (remote/headless)
+echo "CLOUD_TOKEN" | ./bin/homeycli.js auth set-token --stdin
 ```
 
 ## Basic Tests
@@ -113,16 +118,23 @@ Expected: All rooms/zones displayed.
 
 ## Error Cases to Test
 
-### 1. Missing Token
+### 1. Missing Auth
 ```bash
-# Unset token temporarily
+# Temporarily remove env overrides
 unset HOMEY_TOKEN
+unset HOMEY_LOCAL_TOKEN
+unset HOMEY_ADDRESS
+unset HOMEY_MODE
+
+# Clear stored config (optional; restores are manual)
+./bin/homeycli.js auth clear-token
+./bin/homeycli.js auth clear-local
 
 # Should show helpful error
 ./bin/homeycli.js status
 ```
 
-Expected: Clear error message with instructions to set token.
+Expected: Clear error message with instructions for both local and cloud setup.
 
 ### 2. Invalid Device Name
 ```bash
@@ -215,10 +227,11 @@ describe('Homey CLI', () => {
 
 If tests fail:
 
-1. **Check token** - `echo $HOMEY_TOKEN`
-2. **Check Homey online** - Visit https://my.homey.app
-3. **Check dependencies** - `npm list`
-4. **Check Node version** - `node --version` (should be >= 18)
+1. **Check auth config** - `./bin/homeycli.js auth status --json`
+2. **Local mode:** ensure `HOMEY_ADDRESS` is reachable from this machine
+3. **Cloud mode:** check Homey online - https://my.homey.app
+4. **Check dependencies** - `npm list`
+5. **Check Node version** - `node --version` (should be >= 18)
 
 ## Performance Benchmarks
 

@@ -4,7 +4,7 @@ Docs: https://maxsumrall.github.io/homeycli/
 
 Agent integration contract (stable JSON fields/errors): `docs/output.md`
 
-Control Athom Homey smart home devices from the command line using Cloud API with Bearer token authentication.
+Control Athom Homey smart home devices from the command line via local (LAN/VPN) or cloud APIs.
 
 ## Features
 
@@ -26,33 +26,78 @@ cd path/to/homeycli
 npm install
 ```
 
-### 2. Get Bearer Token
+### 2. Choose connection mode
 
-Visit https://tools.developer.homey.app/api/clients and create a Personal Access Token.
+This CLI supports **local** and **cloud** connections.
+
+#### Local mode (LAN/VPN)
+
+Use this when the machine running `homeycli` can reach your Homey on the local network (or via VPN).
+
+1. In the **Homey Web App**, generate a **local API key**.
+2. Find your Homey local address (e.g. `http://192.168.1.50`).
+
+#### Cloud mode (remote/headless)
+
+Use this when you run the agent on a VPS / outside your home network.
+
+- Create a cloud token in Homey Developer Tools:
+  https://tools.developer.homey.app/api/clients
+
+(Advanced: you can also set up an OAuth client + flow in Developer Tools; the CLI currently supports token-based auth best.)
 
 ### 3. Configure
 
-Set environment variable:
+Default is `HOMEY_MODE=auto`:
+- if a local address is configured, it uses **local**
+- otherwise it uses **cloud**
+
+#### Configure local
+
 ```bash
-export HOMEY_TOKEN="your-bearer-token-here"
+echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
 ```
 
-Or save to config file (recommended for tools/agents):
+#### Configure cloud
+
 ```bash
-# recommended: read token from stdin (avoids shell history)
-echo "your-token-here" | homeycli auth set-token --stdin
-
-# or interactive hidden prompt
-homeycli auth set-token --prompt
-
-# check auth status (never prints the token)
-homeycli auth status
+echo "CLOUD_TOKEN" | homeycli auth set-token --stdin
 ```
 
-Manual config file (equivalent):
+#### Force a mode (optional)
+
+```bash
+homeycli auth set-mode auto
+homeycli auth set-mode local
+homeycli auth set-mode cloud
+```
+
+#### Env vars (override config)
+
+```bash
+export HOMEY_MODE=auto|local|cloud
+export HOMEY_ADDRESS="http://192.168.1.50"      # local
+export HOMEY_LOCAL_TOKEN="..."                  # local
+export HOMEY_TOKEN="..."                        # cloud
+```
+
+Manual config file (not recommended; use `homeycli auth ...` instead):
+
 ```bash
 mkdir -p ~/.homey
-echo '{"token":"your-token-here"}' > ~/.homey/config.json
+cat > ~/.homey/config.json <<'JSON'
+{
+  "mode": "auto",
+  "local": { "address": "http://192.168.1.50", "token": "LOCAL_API_KEY" },
+  "cloud": { "token": "CLOUD_TOKEN" }
+}
+JSON
+```
+
+Legacy config is still supported for cloud token only:
+
+```json
+{ "token": "CLOUD_TOKEN" }
 ```
 
 ### 4. Test
@@ -166,11 +211,16 @@ homeycli/
 - `chalk` (v4) - Terminal colors
 - `cli-table3` (v0.6) - Pretty tables
 
-## Authentication
+## Authentication / connection modes
 
-Uses Bearer token authentication (not OAuth). Tokens are:
-- Obtained from https://tools.developer.homey.app/api/clients
-- Stored in `HOMEY_TOKEN` env var or `~/.homey/config.json`
+This CLI supports **local** and **cloud** connections:
+
+- **Local (LAN/VPN)**: connect directly to your Homey using a local API key generated in the Homey Web App.
+  - Requires: `HOMEY_ADDRESS` + local token (`HOMEY_LOCAL_TOKEN` or `homeycli auth set-local ...`)
+- **Cloud (remote/headless)**: connect via Athom/Homey cloud using a cloud token (PAT) created in Developer Tools.
+  - Requires: `HOMEY_TOKEN` (or `homeycli auth set-token ...`)
+
+Default `HOMEY_MODE=auto` prefers local when an address is configured.
 
 ## Common Capabilities
 
@@ -219,18 +269,28 @@ If you ever accidentally publish a token anyway, assume it’s compromised: revo
 
 ## Troubleshooting
 
-**No token found:**
-- Set `HOMEY_TOKEN` or create `~/.homey/config.json`
-- Get token from: https://tools.developer.homey.app/api/clients
+**No auth configured:**
+
+Local (LAN/VPN):
+- `echo "<LOCAL_API_KEY>" | homeycli auth set-local --address http://<homey-ip> --stdin`
+
+Cloud (remote/headless):
+- `echo "<CLOUD_TOKEN>" | homeycli auth set-token --stdin`
+- Cloud tokens can be created in Developer Tools: https://tools.developer.homey.app/api/clients
 
 **Device not found / ambiguous:**
 - Use `homeycli devices --json` (or `--match <query>`) to find the exact device `id`
 - If a name matches multiple devices, the CLI returns an error with candidate IDs (use the ID to disambiguate)
 
 **Connection errors:**
-- Check internet connection
-- Verify token is valid
-- Ensure Homey is online in the cloud
+
+- Local mode:
+  - ensure `HOMEY_ADDRESS` is reachable from where you run `homeycli` (LAN/VPN)
+  - ensure the local API key is valid
+- Cloud mode:
+  - check internet connection
+  - verify the cloud token is valid
+  - ensure Homey is online in the cloud
 
 ## License
 

@@ -1,33 +1,44 @@
 ---
 name: homey
-description: Control Athom Homey smart home devices via Cloud API. List/control devices, trigger flows, query zones. Works with Homey Pro, Cloud, and Bridge.
+description: Control Athom Homey smart home devices via local (LAN/VPN) or cloud APIs. List/control devices, trigger flows, query zones. Works with Homey Pro, Cloud, and Bridge.
 metadata: {"clawdbot":{"requires":{"bins":["homeycli"]},"install":[{"id":"homey-npm","kind":"node","package":".","bins":["homeycli"],"label":"Install Homey CLI"}]}}
 ---
 
 # Homey Smart Home Control
 
-Control Athom Homey devices via Cloud API using Bearer token authentication.
+Control Athom Homey devices via local (LAN/VPN) or cloud APIs using token authentication.
 
 ## Setup
 
 Requires Node.js >= 18.
 
-1. **Get Bearer token:** Visit https://tools.developer.homey.app/api/clients and create a Personal Access Token
-2. **Set token:**
+1. **Decide local vs cloud**
+
+   - **Local (LAN/VPN):** use a local API key from the Homey Web App + Homey IP address
+   - **Cloud (remote/headless):** use a cloud token from Developer Tools
+
+2. **Configure**
+
+   **Local (recommended when the agent runs on your home network):**
+
    ```bash
-   export HOMEY_TOKEN="your-bearer-token-here"
+   echo "<LOCAL_API_KEY>" | homeycli auth set-local --address http://<homey-ip> --stdin
    ```
-   Or save to config file:
+
+   **Cloud (recommended for VPS/headless hosting):**
+
    ```bash
-   homeycli auth set-token "your-token-here"
+   echo "<CLOUD_TOKEN>" | homeycli auth set-token --stdin
+   ```
+
+   Check status:
+
+   ```bash
    homeycli auth status
    ```
-   Manual config file (equivalent):
-   ```bash
-   mkdir -p ~/.homey
-   echo '{"token":"your-token-here"}' > ~/.homey/config.json
-   ```
-3. **Test connection:**
+
+3. **Test connection**
+
    ```bash
    homeycli status
    ```
@@ -153,9 +164,14 @@ homeycli devices --json | jq '.[] | select(.class == "light") | .name'
 
 ## Troubleshooting
 
-**"No token found"**
-- Set `HOMEY_TOKEN` environment variable or create `~/.homey/config.json`
-- Get token from: https://tools.developer.homey.app/api/clients
+**"No auth configured"**
+
+Local (LAN/VPN):
+- Save local config: `echo "<LOCAL_API_KEY>" | homeycli auth set-local --address http://<homey-ip> --stdin`
+
+Cloud (remote/headless):
+- Save cloud token: `echo "<CLOUD_TOKEN>" | homeycli auth set-token --stdin`
+- Cloud tokens can be created in Homey Developer Tools: https://tools.developer.homey.app/api/clients
 
 **"Device not found" / ambiguous match**
 - List devices with `homeycli devices --json` (or `homeycli devices --match <query> --json`) to find the right `id`
@@ -167,12 +183,10 @@ homeycli devices --json | jq '.[] | select(.class == "light") | .name'
 
 ## API Reference
 
-The CLI uses the official `homey-api` npm package (v3.15.0) with Bearer token authentication.
+The CLI uses the official `homey-api` npm package (v3.15.0).
 
-**Authentication flow:**
-1. Create AthomCloudAPI with token
-2. Get authenticated user
-3. Get first Homey (or specify by ID)
-4. Create session
-5. Access devices/flows/zones
+**Auth/connection modes:**
+
+- **Local mode:** `HomeyAPI.createLocalAPI({ address, token })` using the Homey Web App local API key.
+- **Cloud mode:** `AthomCloudAPI` using a cloud bearer token (PAT) to create a session and access devices/flows/zones.
 

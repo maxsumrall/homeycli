@@ -32,23 +32,27 @@ npm install
 echo "🔧 Making CLI executable..."
 chmod +x bin/homeycli.js
 
-# Check for token
-if [ -z "$HOMEY_TOKEN" ] && [ ! -f "$HOME/.homey/config.json" ]; then
+# Check for auth
+if [ -z "$HOMEY_TOKEN" ] && [ -z "$HOMEY_LOCAL_TOKEN" ] && [ ! -f "$HOME/.homey/config.json" ]; then
   echo ""
-  echo "⚠️  No Homey token found (HOMEY_TOKEN or ~/.homey/config.json)."
+  echo "⚠️  No Homey auth found (env vars or ~/.homey/config.json)."
   echo ""
-  echo "To get a token:"
-  echo "  1. Visit: https://tools.developer.homey.app/api/clients"
-  echo "  2. Create a Personal Access Token"
+  echo "Local mode (LAN/VPN):"
+  echo "  # generate a local API key in the Homey Web App"
+  echo "  ./bin/homeycli.js auth set-local --address http://<homey-ip> --prompt"
   echo ""
-  echo "Then set it (recommended):"
-  echo "  ./bin/homeycli.js auth set-token \"your-token-here\""
+  echo "Cloud mode (remote/headless):"
+  echo "  # create a cloud token in Developer Tools: https://tools.developer.homey.app/api/clients"
+  echo "  ./bin/homeycli.js auth set-token --prompt"
   echo ""
-  echo "Or set env var:"
-  echo "  export HOMEY_TOKEN=\"your-token-here\""
+  echo "Env vars (optional):"
+  echo "  export HOMEY_MODE=auto|local|cloud"
+  echo "  export HOMEY_ADDRESS=\"http://192.168.1.50\""
+  echo "  export HOMEY_LOCAL_TOKEN=\"...\""
+  echo "  export HOMEY_TOKEN=\"...\""
   echo ""
 else
-  echo "✅ Token found (env var or config file)"
+  echo "✅ Auth appears to be configured (env var or config file present)"
 fi
 
 # Test CLI
@@ -76,7 +80,7 @@ echo ""
 echo "🎉 Installation complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Set your token: ./bin/homeycli.js auth set-token \"...\""
+echo "  1. Check config: ./bin/homeycli.js auth status"
 echo "  2. Test: ./bin/homeycli.js status"
 echo "  3. List devices: ./bin/homeycli.js devices --json"
 echo ""

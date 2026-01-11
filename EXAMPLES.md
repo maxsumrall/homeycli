@@ -4,13 +4,17 @@ Real-world usage examples for `homeycli`.
 
 ## Setup
 
-```bash
-# Set your token (get from https://tools.developer.homey.app/api/clients)
-export HOMEY_TOKEN="your-bearer-token-here"
+Pick **local** (LAN/VPN) or **cloud** (remote/headless).
 
-# Or save to config
-mkdir -p ~/.homey
-echo '{"token":"your-token"}' > ~/.homey/config.json
+```bash
+# Local mode (LAN/VPN)
+echo "LOCAL_API_KEY" | homeycli auth set-local --address http://<homey-ip> --stdin
+
+# Cloud mode (remote/headless)
+echo "CLOUD_TOKEN" | homeycli auth set-token --stdin
+
+# Check what will be used
+homeycli auth status
 
 # Test connection
 homeycli status
@@ -28,9 +32,10 @@ Output:
 🏠 Homey Status:
 
   Name: Home
-  Platform: local v8.1.0
+  Connection: local (http://192.168.1.50)
+  Platform: local 2
   Hostname: homey-abc123
-  Cloud ID: 5f9a1234567890abcdef
+  Homey ID: 5f9a1234567890abcdef
   Status: ✓ Connected
 ```
 
@@ -304,13 +309,10 @@ homeycli flow --help             # Flow command help
 
 ## Troubleshooting
 
-**No token found:**
+**No auth configured:**
 ```bash
-# Check if token is set
-echo $HOMEY_TOKEN
-
-# Or check config file
-cat ~/.homey/config.json
+# Shows mode + whether local/cloud credentials are present (never prints full tokens)
+homeycli auth status
 ```
 
 **Connection timeout:**
@@ -322,6 +324,6 @@ homeycli status
 ```
 
 **API rate limits:**
-- The Homey Cloud API has rate limits
+- Cloud mode may be rate-limited by Athom/Homey
 - If you hit limits, wait a minute and retry
 - Batch operations when possible
