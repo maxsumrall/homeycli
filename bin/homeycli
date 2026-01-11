@@ -1,0 +1,56 @@
+#!/usr/bin/env node
+
+// Wrapper entrypoint.
+//
+// Goals:
+// - avoid "permission denied" by not requiring bin/homeycli.js to be executable
+// - best-effort ensure dependencies are installed (common after updates)
+
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const root = path.resolve(__dirname, '..');
+const cliPath = path.resolve(__dirname, 'homeycli.js');
+
+function hasDeps() {
+  try {
+    require.resolve('commander', { paths: [root] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installDeps() {
+  const useCi = (() => {
+    try {
+      require('fs').accessSync(path.join(root, 'package-lock.json'));
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  const cmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const args = useCi ? ['ci'] : ['install'];
+
+  const res = spawnSync(cmd, args, {
+    cwd: root,
+    stdio: 'inherit',
+    env: process.env,
+  });
+
+  if (res.status !== 0) {
+    process.exit(res.status || 1);
+  }
+}
+
+if (!hasDeps()) {
+  // In practice this happens after a skill update where dependencies changed.
+  // We attempt to install automatically to reduce user friction.
+  console.error('homeycli: dependencies not installed; running npm install...');
+  installDeps();
+}
+
+// Delegate to the real CLI.
+require(cliPath);
