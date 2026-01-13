@@ -20,27 +20,5 @@ inputs:
     default: "20"
 
 runs:
-  using: "composite"
-  steps:
-    - name: Checkout base
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.base.sha }}
-        fetch-depth: 0
-
-    - name: Setup Node
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-
-    - name: Install pi
-      shell: bash
-      run: npm i -g @mariozechner/pi-coding-agent@${{ inputs.pi-version }}
-
-    - name: Run review
-      shell: bash
-      env:
-        PI_PROVIDER: ${{ inputs.provider }}
-        PI_MODEL: ${{ inputs.model }}
-        PI_MAX_COMMENTS: ${{ inputs.max-comments }}
-      run: node "${{ github.action_path }}/pr-review.mjs"
+  using: node20
+  main: index.js
