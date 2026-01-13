@@ -70,4 +70,4 @@ Notes:
 ## Notes
 
 - Inline comments are **best effort**: GitHub omits `patch` for large diffs/binary files, which prevents line→position mapping.
-- This action expects to run on `pull_request_target` events so it can access secrets.
+- This action expects to run on `pull_request_target` events (PR review mode) or `issue_comment` events on PRs (comment mode) so it can access secrets.

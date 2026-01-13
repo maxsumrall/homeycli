@@ -2,6 +2,23 @@ name: "pi-pr-review"
 description: "Run pi in CI to generate a PR review (comment-only) with inline comments + summary"
 
 inputs:
+  mode:
+    description: "Execution mode: auto | pr-review | comment. auto = pr-review when triggered by PR events, comment when triggered by issue_comment on a PR."
+    required: false
+    default: "auto"
+  trigger-phrase:
+    description: "Trigger phrase for comment mode (string match)."
+    required: false
+    default: "@pi-bot"
+  use-sticky-comment:
+    description: "If true in comment mode, create/update a single sticky comment instead of posting new comments."
+    required: false
+    default: "true"
+  sticky-comment-marker:
+    description: "Hidden marker used to find the sticky comment."
+    required: false
+    default: "<!-- pi-bot -->"
+
   pi-version:
     description: "npm version/range for @mariozechner/pi-coding-agent"
     required: false
@@ -14,6 +31,7 @@ inputs:
     description: "model id for the provider"
     required: false
     default: "minimax/minimax-m2.1"
+
   tools:
     description: "Comma-separated pi tools (e.g. read,grep,find,ls,bash). Default is read-only."
     required: false
@@ -22,8 +40,9 @@ inputs:
     description: "Newline or comma-separated allowlist for the restricted bash tool. Required if tools includes 'bash'."
     required: false
     default: ""
+
   max-comments:
-    description: "Max inline comments to post"
+    description: "Max inline comments to post (pr-review mode only)."
     required: false
     default: "20"
 

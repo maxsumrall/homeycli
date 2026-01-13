@@ -31,6 +31,10 @@ function error(msg) {
   console.error(`::error::${msg}`);
 }
 
+function warn(msg) {
+  console.log(`::warning::${msg}`);
+}
+
 function fail(msg) {
   error(msg);
   process.exit(1);
@@ -129,23 +133,31 @@ async function ghFetchJson(url, token) {
   return res.json();
 }
 
-async function ghPostJson(url, token, body) {
+async function ghRequestJson(url, token, method, body) {
   const res = await fetch(url, {
-    method: "POST",
+    method,
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`GitHub API POST error ${res.status} for ${url}: ${text}`);
+    throw new Error(`GitHub API ${method} error ${res.status} for ${url}: ${text}`);
   }
 
   return text ? JSON.parse(text) : {};
+}
+
+async function ghPostJson(url, token, body) {
+  return ghRequestJson(url, token, "POST", body);
+}
+
+async function ghPatchJson(url, token, body) {
+  return ghRequestJson(url, token, "PATCH", body);
 }
 
 async function listPullFiles(owner, repo, prNumber, token) {
@@ -163,9 +175,123 @@ async function listPullFiles(owner, repo, prNumber, token) {
   return out;
 }
 
+async function getUserPermission(owner, repo, username, token) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/collaborators/${encodeURIComponent(username)}/permission`;
+  const res = await ghFetchJson(url, token);
+  return String(res?.permission || "none");
+}
+
+function hasWriteAccess(permission) {
+  return permission === "admin" || permission === "maintain" || permission === "write";
+}
+
+function stripHtmlComments(content) {
+  return String(content || "").replace(/<!--[\s\S]*?-->/g, "");
+}
+
+function stripInvisibleCharacters(content) {
+  content = content.replace(/[\u200B\u200C\u200D\uFEFF]/g, "");
+  content = content.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
+  content = content.replace(/\u00AD/g, "");
+  content = content.replace(/[\u202A-\u202E\u2066-\u2069]/g, "");
+  return content;
+}
+
+function stripMarkdownImageAltText(content) {
+  return content.replace(/!\[[^\]]*\]\(/g, "![](");
+}
+
+function stripMarkdownLinkTitles(content) {
+  content = content.replace(/(\[[^\]]*\]\([^)]+)\s+"[^"]*"/g, "$1");
+  content = content.replace(/(\[[^\]]*\]\([^)]+)\s+'[^']*'/g, "$1");
+  return content;
+}
+
+function stripHiddenAttributes(content) {
+  content = content.replace(/\salt\s*=\s*["'][^"']*["']/gi, "");
+  content = content.replace(/\salt\s*=\s*[^\s>]+/gi, "");
+  content = content.replace(/\stitle\s*=\s*["'][^"']*["']/gi, "");
+  content = content.replace(/\stitle\s*=\s*[^\s>]+/gi, "");
+  content = content.replace(/\saria-label\s*=\s*["'][^"']*["']/gi, "");
+  content = content.replace(/\saria-label\s*=\s*[^\s>]+/gi, "");
+  content = content.replace(/\sdata-[a-zA-Z0-9-]+\s*=\s*["'][^"']*["']/gi, "");
+  content = content.replace(/\sdata-[a-zA-Z0-9-]+\s*=\s*[^\s>]+/gi, "");
+  content = content.replace(/\splaceholder\s*=\s*["'][^"']*["']/gi, "");
+  content = content.replace(/\splaceholder\s*=\s*[^\s>]+/gi, "");
+  return content;
+}
+
+function normalizeHtmlEntities(content) {
+  content = content.replace(/&#(\d+);/g, (_, dec) => {
+    const num = parseInt(dec, 10);
+    if (num >= 32 && num <= 126) return String.fromCharCode(num);
+    return "";
+  });
+  content = content.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+    const num = parseInt(hex, 16);
+    if (num >= 32 && num <= 126) return String.fromCharCode(num);
+    return "";
+  });
+  return content;
+}
+
+function sanitizeUserText(content) {
+  content = stripHtmlComments(String(content || ""));
+  content = stripInvisibleCharacters(content);
+  content = stripMarkdownImageAltText(content);
+  content = stripMarkdownLinkTitles(content);
+  content = stripHiddenAttributes(content);
+  content = normalizeHtmlEntities(content);
+  return content.trim();
+}
+
+function extractUserRequest(commentBody, triggerPhrase) {
+  const body = String(commentBody || "");
+  const idx = body.indexOf(triggerPhrase);
+  if (idx === -1) return undefined;
+
+  // Take the substring after the trigger phrase and trim typical separators.
+  let rest = body.slice(idx + triggerPhrase.length);
+  rest = rest.replace(/^\s*[:,-]?\s*/, "");
+  const cleaned = sanitizeUserText(rest);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+async function listIssueComments(owner, repo, issueNumber, token) {
+  const out = [];
+  let page = 1;
+  for (;;) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`;
+    const batch = await ghFetchJson(url, token);
+    out.push(...batch);
+    if (batch.length < 100) break;
+    page++;
+  }
+  return out;
+}
+
+async function upsertStickyComment(owner, repo, issueNumber, token, marker, body) {
+  const comments = await listIssueComments(owner, repo, issueNumber, token);
+
+  // Prefer a comment authored by github-actions[bot] containing the marker.
+  const mine = comments.find((c) => c?.user?.login === "github-actions[bot]" && String(c?.body || "").includes(marker));
+  if (mine) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${mine.id}`;
+    return ghPatchJson(url, token, { body });
+  }
+
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`;
+  return ghPostJson(url, token, { body });
+}
+
 function readPromptFile(actionDir, maxComments) {
   const raw = fs.readFileSync(path.join(actionDir, "prompt.txt"), "utf-8");
   return raw.replaceAll("${PI_MAX_COMMENTS}", String(maxComments));
+}
+
+function readCommentPromptFile(actionDir, userRequest) {
+  const raw = fs.readFileSync(path.join(actionDir, "prompt-comment.txt"), "utf-8");
+  return raw.replaceAll("${PI_USER_REQUEST}", userRequest || "(empty)");
 }
 
 function appendStepSummary(markdown) {
@@ -179,6 +305,11 @@ async function main() {
   const actionDir = mustEnv("GITHUB_ACTION_PATH");
 
   // Inputs
+  const modeInput = getInput("mode", "auto");
+  const triggerPhrase = getInput("trigger-phrase", "@pi-bot");
+  const useStickyComment = getInput("use-sticky-comment", "true") !== "false";
+  const stickyMarker = getInput("sticky-comment-marker", "<!-- pi-bot -->");
+
   const piVersion = getInput("pi-version", "latest");
   const provider = getInput("provider", process.env.PI_PROVIDER || "openrouter");
   const model = getInput("model", process.env.PI_MODEL || "minimax/minimax-m2.1");
@@ -208,18 +339,58 @@ async function main() {
 
   const eventPath = mustEnv("GITHUB_EVENT_PATH");
   const payload = JSON.parse(fs.readFileSync(eventPath, "utf-8"));
-  const pr = payload.pull_request;
-  if (!pr) fail("This action must run on pull_request_target events (missing pull_request in event payload)");
-
-  const prNumber = pr.number;
-  const baseSha = pr.base.sha;
-  const headSha = pr.head.sha;
-
-  info(`ai-pr-review: PR #${prNumber} using ${provider}/${model} (pi ${piVersion})`);
-  info(`ai-pr-review: tools=${tools || "(none)"}${hasBash ? " (restricted bash enabled)" : ""}`);
 
   const repoFull = mustEnv("GITHUB_REPOSITORY");
   const [owner, repo] = repoFull.split("/");
+
+  // Determine execution mode
+  // - PR events (pull_request_target): payload.pull_request present
+  // - Comment mode: issue_comment on a PR: payload.issue.pull_request present
+  const isPrEvent = !!payload.pull_request;
+  const isIssueCommentOnPr = !!payload.issue?.pull_request && !!payload.comment;
+
+  let mode = String(modeInput || "auto");
+  if (mode === "auto") {
+    mode = isIssueCommentOnPr ? "comment" : "pr-review";
+  }
+
+  // Access control like claude-code-action: only allow users with write-ish permissions.
+  // For PR events, the opener check is usually done in the workflow. For comment mode we must check here.
+  const actor = payload.sender?.login || payload.comment?.user?.login || "";
+  if (mode === "comment") {
+    if (!actor) {
+      warn("comment mode: cannot determine actor; skipping");
+      return;
+    }
+    const perm = await getUserPermission(owner, repo, actor, token);
+    if (!hasWriteAccess(perm)) {
+      warn(`comment mode: ignoring trigger from ${actor} (permission=${perm})`);
+      return;
+    }
+  }
+
+  // Resolve PR metadata
+  let prNumber;
+  let baseSha;
+  let headSha;
+
+  if (isPrEvent) {
+    const pr = payload.pull_request;
+    prNumber = pr.number;
+    baseSha = pr.base.sha;
+    headSha = pr.head.sha;
+  } else if (isIssueCommentOnPr) {
+    prNumber = payload.issue.number;
+    const pr = await ghFetchJson(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, token);
+    baseSha = pr.base.sha;
+    headSha = pr.head.sha;
+  } else {
+    warn(`Unsupported event payload (mode=${mode}, event=${payload?.action || "?"}); skipping`);
+    return;
+  }
+
+  info(`pi-action: mode=${mode} PR #${prNumber} using ${provider}/${model} (pi ${piVersion})`);
+  info(`pi-action: tools=${tools || "(none)"}${hasBash ? " (restricted bash enabled)" : ""}`);
 
   await group("Install pi", async () => {
     sh("npm", ["i", "-g", `@mariozechner/pi-coding-agent@${piVersion}`]);
@@ -232,6 +403,16 @@ async function main() {
 
     sh("pi", ["--version"]);
   });
+
+  // Comment-mode trigger check (after access control, before any heavy work)
+  let userRequest;
+  if (mode === "comment") {
+    userRequest = extractUserRequest(payload.comment?.body, triggerPhrase);
+    if (!userRequest) {
+      warn(`comment mode: trigger phrase '${triggerPhrase}' not found or empty request; skipping`);
+      return;
+    }
+  }
 
   // Create separate worktree for PR head.
   const prDir = path.resolve(".ai-pr-worktree");
@@ -272,7 +453,9 @@ async function main() {
   const filesFile = path.join(ctxDir, "pr.files");
 
   const extPath = path.join(actionDir, "ci-sandbox.ts");
-  const prompt = readPromptFile(actionDir, maxComments);
+  const prompt = mode === "comment"
+    ? readCommentPromptFile(actionDir, userRequest)
+    : readPromptFile(actionDir, maxComments);
 
   const piArgs = [
     "-p",
@@ -293,7 +476,7 @@ async function main() {
     prompt,
   ];
 
-  const review = await group("Run pi", async () => {
+  const piOutput = await group("Run pi", async () => {
     const piRes = spawnSync("pi", piArgs, {
       cwd: prDir,
       encoding: "utf-8",
@@ -309,47 +492,65 @@ async function main() {
       throw new Error(`pi failed (exit ${piRes.status}):\n${piRes.stderr || piRes.stdout}`);
     }
 
-    const modelOut = (piRes.stdout || "").trim();
-    return safeJsonParse(modelOut);
+    return (piRes.stdout || "").trim();
   });
 
-  const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
-  const commentsIn = Array.isArray(review.comments) ? review.comments : [];
+  if (mode === "comment") {
+    const marker = stickyMarker;
+    const body = `${marker}\n\n${piOutput}`;
 
-  appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\n${summary}`);
+    appendStepSummary(`## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\``);
 
-  // Fetch PR file patches for inline comment mapping.
-  const prFiles = await group("Fetch PR file patches", async () => {
-    return await listPullFiles(owner, repo, prNumber, token);
-  });
-
-  const patchByPath = new Map();
-  for (const f of prFiles) patchByPath.set(f.filename, f.patch);
-
-  const comments = [];
-  for (const c of commentsIn.slice(0, maxComments)) {
-    const p = c?.path;
-    const line = c?.line;
-    const body = c?.body;
-    if (typeof p !== "string" || typeof body !== "string") continue;
-    if (typeof line !== "number" || !Number.isFinite(line) || line <= 0) continue;
-
-    const patch = patchByPath.get(p);
-    const pos = positionForNewLine(patch, line);
-    if (!pos) continue;
-
-    comments.push({ path: p, position: pos, body });
-  }
-
-  await group("Create GitHub review", async () => {
-    const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
-    await ghPostJson(url, token, {
-      commit_id: headSha,
-      event: "COMMENT",
-      body: summary,
-      ...(comments.length > 0 ? { comments } : {}),
+    await group("Post comment", async () => {
+      if (useStickyComment) {
+        await upsertStickyComment(owner, repo, prNumber, token, marker, body);
+      } else {
+        const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+        await ghPostJson(url, token, { body });
+      }
     });
-  });
+
+    // Done.
+  } else {
+    const review = safeJsonParse(piOutput);
+    const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
+    const commentsIn = Array.isArray(review.comments) ? review.comments : [];
+
+    appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\n${summary}`);
+
+    // Fetch PR file patches for inline comment mapping.
+    const prFiles = await group("Fetch PR file patches", async () => {
+      return await listPullFiles(owner, repo, prNumber, token);
+    });
+
+    const patchByPath = new Map();
+    for (const f of prFiles) patchByPath.set(f.filename, f.patch);
+
+    const comments = [];
+    for (const c of commentsIn.slice(0, maxComments)) {
+      const p = c?.path;
+      const line = c?.line;
+      const body = c?.body;
+      if (typeof p !== "string" || typeof body !== "string") continue;
+      if (typeof line !== "number" || !Number.isFinite(line) || line <= 0) continue;
+
+      const patch = patchByPath.get(p);
+      const pos = positionForNewLine(patch, line);
+      if (!pos) continue;
+
+      comments.push({ path: p, position: pos, body });
+    }
+
+    await group("Create GitHub review", async () => {
+      const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+      await ghPostJson(url, token, {
+        commit_id: headSha,
+        event: "COMMENT",
+        body: summary,
+        ...(comments.length > 0 ? { comments } : {}),
+      });
+    });
+  }
 
   await group("Cleanup", async () => {
     try {
