@@ -152,7 +152,7 @@ function buildPrompt() {
     "Return ONLY valid JSON (no markdown, no backticks).",
     "Schema:",
     "{",
-    '  "event": "APPROVE" | "REQUEST_CHANGES" | "COMMENT",',
+    '  "event": "COMMENT",',
     '  "summary": "<markdown summary including key issues + recommendations>",',
     '  "comments": [',
     '    { "path": "relative/path", "line": 123, "body": "<markdown>" }',
@@ -165,10 +165,8 @@ function buildPrompt() {
     "- Do NOT comment on deleted lines.",
     "- Max 20 comments; prefer the highest-signal ones.",
     "",
-    "Decision guidance:",
-    "- REQUEST_CHANGES if there are correctness/security issues or broken API/UX.",
-    "- COMMENT if improvements are optional.",
-    "- APPROVE if it's solid and no meaningful issues.",
+    "Important:",
+    "- The review must be a COMMENT-only review (no approvals, no request-changes).",
   ].join("\n");
 }
 
@@ -282,7 +280,9 @@ async function main() {
   const modelOut = (piRes.stdout || "").trim();
   const review = safeJsonParse(modelOut);
 
-  const event = normalizeEvent(review.event);
+  // Always COMMENT. GitHub Actions tokens often can't approve/request-changes unless
+  // the repo enables "Allow GitHub Actions to create and approve pull requests".
+  const event = "COMMENT";
   const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
   const commentsIn = Array.isArray(review.comments) ? review.comments : [];
 
