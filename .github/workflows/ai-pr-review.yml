@@ -2,7 +2,7 @@ name: ai-pr-review
 
 on:
   pull_request_target:
-    types: [opened]
+    types: [opened, labeled]
 
 permissions:
   contents: read
@@ -14,7 +14,12 @@ concurrency:
 
 jobs:
   review:
-    if: github.event.pull_request.user.login == 'maxsumrall'
+    if: |
+      github.event.pull_request.user.login == 'maxsumrall' &&
+      (
+        github.event.action == 'opened' ||
+        (github.event.action == 'labeled' && github.event.label.name == 'ai')
+      )
     runs-on: ubuntu-latest
     steps:
       # Checkout the base repo (not the PR head). The harness will create a separate worktree
