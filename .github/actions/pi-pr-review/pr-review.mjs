@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -40,12 +41,6 @@ function safeJsonParse(text) {
   }
   const candidate = text.slice(first, last + 1);
   return JSON.parse(candidate);
-}
-
-function normalizeEvent(event) {
-  const e = String(event || "").toUpperCase().trim();
-  if (e === "APPROVE" || e === "REQUEST_CHANGES" || e === "COMMENT") return e;
-  return "COMMENT";
 }
 
 function positionForNewLine(patch, targetLine) {
@@ -143,40 +138,19 @@ async function listPullFiles(owner, repo, prNumber, token) {
   return out;
 }
 
-function buildPrompt() {
-  return [
-    "You are a senior engineer doing a GitHub Pull Request review.",
-    "Review the diff and (if needed) inspect the repository files.",
-    "Be candid and specific.",
-    "",
-    "Return ONLY valid JSON (no markdown, no backticks).",
-    "Schema:",
-    "{",
-    '  "event": "COMMENT",',
-    '  "summary": "<markdown summary including key issues + recommendations>",',
-    '  "comments": [',
-    '    { "path": "relative/path", "line": 123, "body": "<markdown>" }',
-    "  ]",
-    "}",
-    "",
-    "Rules for inline comments:",
-    "- Only comment on RIGHT-side (new file) line numbers.",
-    "- Only use line numbers that exist in the PR diff from base..head.",
-    "- Do NOT comment on deleted lines.",
-    "- Max 20 comments; prefer the highest-signal ones.",
-    "",
-    "Important:",
-    "- The review must be a COMMENT-only review (no approvals, no request-changes).",
-  ].join("\n");
+function readPromptFile(maxComments) {
+  const promptPath = new URL("./prompt.txt", import.meta.url);
+  const raw = fs.readFileSync(promptPath, "utf-8");
+  return raw.replaceAll("${PI_MAX_COMMENTS}", String(maxComments));
 }
 
 async function main() {
   const token = mustEnv("GITHUB_TOKEN");
   const provider = process.env.PI_PROVIDER || "openrouter";
   const model = process.env.PI_MODEL || "minimax/minimax-m2.1";
+  const maxComments = Math.max(0, Number(process.env.PI_MAX_COMMENTS || "20") || 20);
 
   // Fail fast if the provider key isn't present.
-  // (pi can also read keys from ~/.pi/agent/auth.json, but CI typically relies on env vars.)
   if (provider === "openrouter") {
     mustEnv("OPENROUTER_API_KEY");
   }
@@ -196,7 +170,7 @@ async function main() {
   const repoFull = mustEnv("GITHUB_REPOSITORY");
   const [owner, repo] = repoFull.split("/");
 
-  // Create separate worktree for PR head, so this harness + sandbox extension come from base.
+  // Create separate worktree for PR head.
   const prDir = path.resolve(".ai-pr-worktree");
 
   // Best-effort cleanup from previous runs.
@@ -212,7 +186,6 @@ async function main() {
     // ignore
   }
 
-  // Ensure we have the PR head ref locally.
   // refs/pull/<id>/head is available on GitHub for PRs (including forks).
   sh("git", ["fetch", "--no-tags", "origin", `+refs/pull/${prNumber}/head:refs/remotes/origin/pr-${prNumber}`]);
   sh("git", ["worktree", "add", "--detach", prDir, `refs/remotes/origin/pr-${prNumber}`]);
@@ -221,18 +194,9 @@ async function main() {
   const ctxDir = path.join(prDir, ".ai-review");
   fs.mkdirSync(ctxDir, { recursive: true });
 
-  const diffText = sh(
-    "git",
-    ["-C", prDir, "diff", "--patch", "--unified=3", `${baseSha}...${headSha}`],
-  );
-  const logText = sh(
-    "git",
-    ["-C", prDir, "log", "--oneline", "--no-decorate", `${baseSha}..${headSha}`],
-  );
-  const nameStatus = sh(
-    "git",
-    ["-C", prDir, "diff", "--name-status", `${baseSha}...${headSha}`],
-  );
+  const diffText = sh("git", ["-C", prDir, "diff", "--patch", "--unified=3", `${baseSha}...${headSha}`]);
+  const logText = sh("git", ["-C", prDir, "log", "--oneline", "--no-decorate", `${baseSha}..${headSha}`]);
+  const nameStatus = sh("git", ["-C", prDir, "diff", "--name-status", `${baseSha}...${headSha}`]);
 
   const diffFile = path.join(ctxDir, "pr.diff");
   const logFile = path.join(ctxDir, "pr.log");
@@ -242,7 +206,8 @@ async function main() {
   fs.writeFileSync(logFile, logText);
   fs.writeFileSync(filesFile, nameStatus);
 
-  const extPath = path.resolve(".pi/extensions/ci-sandbox.ts");
+  const extPath = new URL("./ci-sandbox.ts", import.meta.url);
+  const prompt = readPromptFile(maxComments);
 
   const piArgs = [
     "-p",
@@ -250,7 +215,7 @@ async function main() {
     "--no-extensions",
     "--no-skills",
     "-e",
-    extPath,
+    path.resolve(fileURLToPath(extPath)),
     "--tools",
     "read,grep,find,ls",
     "--provider",
@@ -260,7 +225,7 @@ async function main() {
     `@${path.relative(prDir, diffFile)}`,
     `@${path.relative(prDir, logFile)}`,
     `@${path.relative(prDir, filesFile)}`,
-    buildPrompt(),
+    prompt,
   ];
 
   const piRes = spawnSync("pi", piArgs, {
@@ -280,9 +245,6 @@ async function main() {
   const modelOut = (piRes.stdout || "").trim();
   const review = safeJsonParse(modelOut);
 
-  // Always COMMENT. GitHub Actions tokens often can't approve/request-changes unless
-  // the repo enables "Allow GitHub Actions to create and approve pull requests".
-  const event = "COMMENT";
   const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
   const commentsIn = Array.isArray(review.comments) ? review.comments : [];
 
@@ -295,7 +257,7 @@ async function main() {
 
   // Best-effort inline comment mapping.
   const comments = [];
-  for (const c of commentsIn.slice(0, 20)) {
+  for (const c of commentsIn.slice(0, maxComments)) {
     const p = c?.path;
     const line = c?.line;
     const body = c?.body;
@@ -312,7 +274,7 @@ async function main() {
   const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
   const payloadBody = {
     commit_id: headSha,
-    event,
+    event: "COMMENT",
     body: summary,
     ...(comments.length > 0 ? { comments } : {}),
   };
@@ -328,7 +290,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  // Fail the workflow so it's visible when reviews don't post.
   console.error(err?.stack || String(err));
   process.exit(1);
 });

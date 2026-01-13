@@ -28,7 +28,6 @@ export default function (pi: ExtensionAPI) {
 
     const input: any = event.input ?? {};
 
-    // Tools we allow in CI. We still validate their paths.
     const p =
       event.toolName === "read" ? input.path :
       event.toolName === "grep" ? input.path :

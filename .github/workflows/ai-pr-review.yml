@@ -22,25 +22,13 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      # Checkout the base repo (not the PR head). The harness will create a separate worktree
-      # for the PR head so our harness + sandbox extension come from the trusted base.
-      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pi-pr-review
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install pi (latest)
-        run: npm i -g @mariozechner/pi-coding-agent@latest
-
-      - name: Run AI PR review (pi + OpenRouter)
+          pi-version: latest
+          provider: openrouter
+          model: minimax/minimax-m2.1
+          max-comments: 20
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PI_PROVIDER: openrouter
-          PI_MODEL: minimax/minimax-m2.1
           PI_SKIP_VERSION_CHECK: "1"
-        run: node scripts/ai/pr-review.mjs

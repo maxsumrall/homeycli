@@ -1,0 +1,46 @@
+name: "pi-pr-review"
+description: "Run pi in CI to generate a PR review (comment-only) with inline comments + summary"
+
+inputs:
+  pi-version:
+    description: "npm version/range for @mariozechner/pi-coding-agent"
+    required: false
+    default: "latest"
+  provider:
+    description: "pi provider (e.g. openrouter)"
+    required: false
+    default: "openrouter"
+  model:
+    description: "model id for the provider"
+    required: false
+    default: "minimax/minimax-m2.1"
+  max-comments:
+    description: "Max inline comments to post"
+    required: false
+    default: "20"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout base
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        fetch-depth: 0
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install pi
+      shell: bash
+      run: npm i -g @mariozechner/pi-coding-agent@${{ inputs.pi-version }}
+
+    - name: Run review
+      shell: bash
+      env:
+        PI_PROVIDER: ${{ inputs.provider }}
+        PI_MODEL: ${{ inputs.model }}
+        PI_MAX_COMMENTS: ${{ inputs.max-comments }}
+      run: node "${{ github.action_path }}/pr-review.mjs"
