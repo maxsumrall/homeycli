@@ -289,9 +289,12 @@ function readPromptFile(actionDir, maxComments) {
   return raw.replaceAll("${PI_MAX_COMMENTS}", String(maxComments));
 }
 
-function readCommentPromptFile(actionDir, userRequest) {
+function readCommentPromptFile(actionDir, userRequest, options) {
   const raw = fs.readFileSync(path.join(actionDir, "prompt-comment.txt"), "utf-8");
-  return raw.replaceAll("${PI_USER_REQUEST}", userRequest || "(empty)");
+  return raw
+    .replaceAll("${PI_USER_REQUEST}", userRequest || "(empty)")
+    .replaceAll("${PI_PR_BRANCH}", options?.branch || "(unknown)")
+    .replaceAll("${PI_CAN_PUSH}", options?.canPush ? "yes" : "no");
 }
 
 function appendStepSummary(markdown) {
@@ -313,20 +316,12 @@ async function main() {
   const piVersion = getInput("pi-version", "latest");
   const provider = getInput("provider", process.env.PI_PROVIDER || "openrouter");
   const model = getInput("model", process.env.PI_MODEL || "minimax/minimax-m2.1");
-  const toolsRaw = getInput("tools", "read,grep,find,ls");
-  const bashAllowlist = getInput("bash-allowlist", "");
+  let toolsRaw = getInput("tools", "read,grep,find,ls");
+  let bashAllowlist = getInput("bash-allowlist", "");
   const maxComments = Math.max(0, Number(getInput("max-comments", process.env.PI_MAX_COMMENTS || "20")) || 20);
 
-  const tools = toolsRaw
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .join(",");
-
-  const hasBash = tools.split(",").includes("bash");
-  if (hasBash && !bashAllowlist.trim()) {
-    fail("tools includes 'bash' but bash-allowlist is empty. Provide an allowlist (newline or comma separated). ");
-  }
+  let tools = "";
+  let hasBash = false;
 
   if (provider === "openrouter") {
     mustEnv("OPENROUTER_API_KEY");
@@ -373,20 +368,46 @@ async function main() {
   let prNumber;
   let baseSha;
   let headSha;
+  let headRef;
+  let headRepoFullName;
 
   if (isPrEvent) {
     const pr = payload.pull_request;
     prNumber = pr.number;
     baseSha = pr.base.sha;
     headSha = pr.head.sha;
+    headRef = pr.head.ref;
+    headRepoFullName = pr.head.repo?.full_name;
   } else if (isIssueCommentOnPr) {
     prNumber = payload.issue.number;
     const pr = await ghFetchJson(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, token);
     baseSha = pr.base.sha;
     headSha = pr.head.sha;
+    headRef = pr.head.ref;
+    headRepoFullName = pr.head.repo?.full_name;
   } else {
     warn(`Unsupported event payload (mode=${mode}, event=${payload?.action || "?"}); skipping`);
     return;
+  }
+
+  const isFork = headRepoFullName && headRepoFullName !== `${owner}/${repo}`;
+  if (mode === "comment" && isFork) {
+    // Can't push to forks. Still respond, but force read-only tools.
+    toolsRaw = "read,grep,find,ls";
+    bashAllowlist = "";
+    warn(`comment mode: PR is from fork (${headRepoFullName}); forcing read-only tools`);
+  }
+
+  // Normalize tools after fork overrides.
+  tools = toolsRaw
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .join(",");
+
+  hasBash = tools.split(",").includes("bash");
+  if (hasBash && !bashAllowlist.trim()) {
+    fail("tools includes 'bash' but bash-allowlist is empty. Provide an allowlist (newline or comma separated). ");
   }
 
   info(`pi-action: mode=${mode} PR #${prNumber} using ${provider}/${model} (pi ${piVersion})`);
@@ -412,6 +433,10 @@ async function main() {
       warn(`comment mode: trigger phrase '${triggerPhrase}' not found or empty request; skipping`);
       return;
     }
+
+    if (isFork) {
+      userRequest = `[NOTE: PR is from a fork (${headRepoFullName}). I cannot push commits; I will only comment with suggestions.]\n\n${userRequest}`;
+    }
   }
 
   // Create separate worktree for PR head.
@@ -432,6 +457,10 @@ async function main() {
 
     sh("git", ["fetch", "--no-tags", "origin", `+refs/pull/${prNumber}/head:refs/remotes/origin/pr-${prNumber}`]);
     sh("git", ["worktree", "add", "--detach", prDir, `refs/remotes/origin/pr-${prNumber}`]);
+
+    // Ensure commits work if the agent chooses to commit.
+    sh("git", ["-C", prDir, "config", "user.name", "pi-bot"]);
+    sh("git", ["-C", prDir, "config", "user.email", "pi-bot@users.noreply.github.com"]);
   });
 
   // Build context files inside the PR worktree.
@@ -454,7 +483,7 @@ async function main() {
 
   const extPath = path.join(actionDir, "ci-sandbox.ts");
   const prompt = mode === "comment"
-    ? readCommentPromptFile(actionDir, userRequest)
+    ? readCommentPromptFile(actionDir, userRequest, { branch: headRef, canPush: !isFork })
     : readPromptFile(actionDir, maxComments);
 
   const piArgs = [
@@ -484,6 +513,9 @@ async function main() {
         ...process.env,
         PI_REVIEW_ROOT: prDir,
         PI_BASH_ALLOWLIST: bashAllowlist,
+        PI_PR_HEAD_REF: headRef || "",
+        // To allow raw --force (discouraged), set PI_ALLOW_FORCE=true in the workflow env.
+        PI_ALLOW_FORCE: process.env.PI_ALLOW_FORCE || "false",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -39,6 +39,7 @@ Notes:
 - Patterns are matched against the *entire* command string.
 - Commands containing shell control operators like `;`, `&&`, `||`, pipes, redirects, backticks, or `$(` are blocked.
 - The action strips common secret env vars from the bash subprocess environment (defense-in-depth).
+- `git push` is additionally constrained to the current PR branch (and `--force` is blocked by default; allow `--force-with-lease`).
 
 ## Example usage
 

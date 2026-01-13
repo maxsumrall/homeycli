@@ -5,7 +5,7 @@ on:
     types: [created]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
 
@@ -31,9 +31,28 @@ jobs:
           mode: comment
           trigger-phrase: '@pi-bot'
           use-sticky-comment: true
-          # tools: read,grep,find,ls,bash
-          # bash-allowlist: |
-          #   git diff *
+          tools: read,grep,find,ls,edit,write,bash
+          bash-allowlist: |
+            # Git
+            git status
+            git diff *
+            git log *
+            git add *
+            git commit *
+            git checkout *
+            git switch *
+            git restore *
+            git reset *
+            git rebase *
+            git merge *
+            git fetch *
+            git pull *
+            git push *
+
+            # Node
+            npm test
+            npm run lint
+            npm run format
           pi-version: latest
           provider: openrouter
           model: minimax/minimax-m2.1

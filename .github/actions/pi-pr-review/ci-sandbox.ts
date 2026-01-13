@@ -45,21 +45,136 @@ function matchWildcard(pattern: string, text: string): boolean {
 }
 
 function containsShellOperators(command: string): boolean {
-  // If you need complex shell scripts, this action isn't the right layer.
-  // Allowlist is for single commands with args.
-  const bad = [
-    "\n",
-    "\r",
-    ";",
-    "&&",
-    "||",
-    "|",
-    ">",
-    "<",
-    "`",
-    "$(",
-  ];
-  return bad.some((b) => command.includes(b));
+  // Detect shell control operators OUTSIDE of quotes.
+  // This avoids false positives for commit messages like: git commit -m "a && b".
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+
+    if (ch === "\\") {
+      // Skip escaped char
+      i++;
+      continue;
+    }
+
+    if (!inDouble && ch === "'") {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inSingle && ch === '"') {
+      inDouble = !inDouble;
+      continue;
+    }
+
+    if (inSingle || inDouble) continue;
+
+    // newline
+    if (ch === "\n" || ch === "\r") return true;
+
+    // multi-char ops
+    const two = command.slice(i, i + 2);
+    if (two === "&&" || two === "||" || two === "$(") return true;
+
+    // single-char ops
+    if (ch === ";" || ch === "|" || ch === ">" || ch === "<" || ch === "`" || ch === "&") return true;
+  }
+
+  return false;
+}
+
+function splitArgs(cmd: string): string[] {
+  // Minimal shell-like splitter for our validation.
+  // Handles single/double quotes and backslash escapes.
+  const out: string[] = [];
+  let cur = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+
+    if (ch === "\\") {
+      // Preserve escaped characters
+      if (i + 1 < cmd.length) {
+        cur += cmd[i + 1];
+        i++;
+      }
+      continue;
+    }
+
+    if (!inDouble && ch === "'") {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inSingle && ch === '"') {
+      inDouble = !inDouble;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && /\s/.test(ch)) {
+      if (cur.length) {
+        out.push(cur);
+        cur = "";
+      }
+      continue;
+    }
+
+    cur += ch;
+  }
+
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+function validateGitPush(command: string, expectedBranch: string, allowForce: boolean) {
+  const args = splitArgs(command);
+  if (args.length < 3) throw new Error("Blocked: git push must specify a remote and refspec");
+  if (args[0] !== "git" || args[1] !== "push") return;
+
+  // Basic flag filtering.
+  const forbiddenFlags = new Set([
+    "--all",
+    "--mirror",
+    "--tags",
+    "--follow-tags",
+    "--delete",
+    "--prune",
+  ]);
+
+  let i = 2;
+  let seenForceWithLease = false;
+  let seenForce = false;
+
+  while (i < args.length && args[i].startsWith("-")) {
+    const a = args[i];
+    if (forbiddenFlags.has(a)) throw new Error(`Blocked: forbidden git push flag ${a}`);
+    if (a === "--force-with-lease") seenForceWithLease = true;
+    if (a === "--force") seenForce = true;
+    i++;
+  }
+
+  if (seenForce && !allowForce) {
+    throw new Error("Blocked: --force is not allowed (use --force-with-lease)");
+  }
+
+  // We allow --force-with-lease always.
+  // Remote
+  const remote = args[i++];
+  if (remote !== "origin") throw new Error("Blocked: git push remote must be 'origin'");
+
+  // Exactly one refspec
+  const refspec = args[i++];
+  if (i !== args.length) throw new Error("Blocked: git push must use exactly one refspec");
+
+  // Accept either:
+  // - HEAD:<branch>
+  // - <branch>
+  if (refspec === expectedBranch) return;
+  if (refspec === `HEAD:${expectedBranch}`) return;
+
+  throw new Error(`Blocked: git push refspec must target the current PR branch (${expectedBranch})`);
 }
 
 function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -177,6 +292,14 @@ export default function (pi: ExtensionAPI) {
         throw new Error("Blocked: shell operators are not allowed in restricted bash");
       }
 
+      const expectedBranch = process.env.PI_PR_HEAD_REF || "";
+      const allowForce = process.env.PI_ALLOW_FORCE === "true";
+
+      if (command.startsWith("git push ") || command === "git push" || command.startsWith("git push-")) {
+        if (!expectedBranch) throw new Error("Blocked: PI_PR_HEAD_REF is not set for git push validation");
+        validateGitPush(command, expectedBranch, allowForce);
+      }
+
       const ok = allowlist.some((p) => matchWildcard(p, command));
       if (!ok) {
         throw new Error(`Blocked: bash command not in allowlist: ${command}`);
@@ -209,6 +332,17 @@ export default function (pi: ExtensionAPI) {
       if (!command) return { block: true, reason: "Blocked: empty bash command" };
       if (allowlist.length === 0) return { block: true, reason: "Blocked: PI_BASH_ALLOWLIST is empty" };
       if (containsShellOperators(command)) return { block: true, reason: "Blocked: shell operators not allowed" };
+
+      const expectedBranch = process.env.PI_PR_HEAD_REF || "";
+      const allowForce = process.env.PI_ALLOW_FORCE === "true";
+      if (command.startsWith("git push")) {
+        if (!expectedBranch) return { block: true, reason: "Blocked: PI_PR_HEAD_REF is not set" };
+        try {
+          validateGitPush(command, expectedBranch, allowForce);
+        } catch (e: any) {
+          return { block: true, reason: e?.message || "Blocked: invalid git push" };
+        }
+      }
 
       const ok = allowlist.some((p) => matchWildcard(p, command));
       if (!ok) return { block: true, reason: "Blocked: bash command not in allowlist" };
