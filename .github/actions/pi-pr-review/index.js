@@ -182,7 +182,20 @@ async function main() {
   const piVersion = getInput("pi-version", "latest");
   const provider = getInput("provider", process.env.PI_PROVIDER || "openrouter");
   const model = getInput("model", process.env.PI_MODEL || "minimax/minimax-m2.1");
+  const toolsRaw = getInput("tools", "read,grep,find,ls");
+  const bashAllowlist = getInput("bash-allowlist", "");
   const maxComments = Math.max(0, Number(getInput("max-comments", process.env.PI_MAX_COMMENTS || "20")) || 20);
+
+  const tools = toolsRaw
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .join(",");
+
+  const hasBash = tools.split(",").includes("bash");
+  if (hasBash && !bashAllowlist.trim()) {
+    fail("tools includes 'bash' but bash-allowlist is empty. Provide an allowlist (newline or comma separated). ");
+  }
 
   if (provider === "openrouter") {
     mustEnv("OPENROUTER_API_KEY");
@@ -203,6 +216,7 @@ async function main() {
   const headSha = pr.head.sha;
 
   info(`ai-pr-review: PR #${prNumber} using ${provider}/${model} (pi ${piVersion})`);
+  info(`ai-pr-review: tools=${tools || "(none)"}${hasBash ? " (restricted bash enabled)" : ""}`);
 
   const repoFull = mustEnv("GITHUB_REPOSITORY");
   const [owner, repo] = repoFull.split("/");
@@ -268,7 +282,7 @@ async function main() {
     "-e",
     extPath,
     "--tools",
-    "read,grep,find,ls",
+    tools,
     "--provider",
     provider,
     "--model",
@@ -286,6 +300,7 @@ async function main() {
       env: {
         ...process.env,
         PI_REVIEW_ROOT: prDir,
+        PI_BASH_ALLOWLIST: bashAllowlist,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -301,7 +316,7 @@ async function main() {
   const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
   const commentsIn = Array.isArray(review.comments) ? review.comments : [];
 
-  appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\n${summary}`);
+  appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\n${summary}`);
 
   // Fetch PR file patches for inline comment mapping.
   const prFiles = await group("Fetch PR file patches", async () => {

@@ -14,6 +14,14 @@ inputs:
     description: "model id for the provider"
     required: false
     default: "minimax/minimax-m2.1"
+  tools:
+    description: "Comma-separated pi tools (e.g. read,grep,find,ls,bash). Default is read-only."
+    required: false
+    default: "read,grep,find,ls"
+  bash-allowlist:
+    description: "Newline or comma-separated allowlist for the restricted bash tool. Required if tools includes 'bash'."
+    required: false
+    default: ""
   max-comments:
     description: "Max inline comments to post"
     required: false
