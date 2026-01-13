@@ -284,6 +284,34 @@ async function upsertStickyComment(owner, repo, issueNumber, token, marker, body
   return ghPostJson(url, token, { body });
 }
 
+async function addEyesReaction(owner, repo, commentId, token) {
+  // Reactions API (stable), still accepts the old preview header, but we just use vnd.github+json.
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`;
+  try {
+    await ghPostJson(url, token, { content: "eyes" });
+  } catch (e) {
+    // Not fatal.
+    warn(`failed to add :eyes: reaction: ${e?.message || e}`);
+  }
+}
+
+async function removeEyesReaction(owner, repo, commentId, token) {
+  const listUrl = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions?per_page=100`;
+  try {
+    const reactions = await ghFetchJson(listUrl, token);
+    const mine = (Array.isArray(reactions) ? reactions : []).find(
+      (r) => r?.content === "eyes" && r?.user?.login === "github-actions[bot]",
+    );
+    if (!mine?.id) return;
+
+    const delUrl = `https://api.github.com/repos/${owner}/${repo}/reactions/${mine.id}`;
+    await ghRequestJson(delUrl, token, "DELETE");
+  } catch (e) {
+    // Not fatal.
+    warn(`failed to remove :eyes: reaction: ${e?.message || e}`);
+  }
+}
+
 function readPromptFile(actionDir, maxComments) {
   const raw = fs.readFileSync(path.join(actionDir, "prompt.txt"), "utf-8");
   return raw.replaceAll("${PI_MAX_COMMENTS}", String(maxComments));
@@ -427,12 +455,15 @@ async function main() {
 
   // Comment-mode trigger check (after access control, before any heavy work)
   let userRequest;
+  let triggerCommentId;
   if (mode === "comment") {
     userRequest = extractUserRequest(payload.comment?.body, triggerPhrase);
     if (!userRequest) {
       warn(`comment mode: trigger phrase '${triggerPhrase}' not found or empty request; skipping`);
       return;
     }
+
+    triggerCommentId = payload.comment?.id;
 
     if (isFork) {
       userRequest = `[NOTE: PR is from a fork (${headRepoFullName}). I cannot push commits; I will only comment with suggestions.]\n\n${userRequest}`;
@@ -505,92 +536,110 @@ async function main() {
     prompt,
   ];
 
-  const piOutput = await group("Run pi", async () => {
-    const piRes = spawnSync("pi", piArgs, {
-      cwd: prDir,
-      encoding: "utf-8",
-      env: {
-        ...process.env,
-        PI_REVIEW_ROOT: prDir,
-        PI_BASH_ALLOWLIST: bashAllowlist,
-        PI_PR_HEAD_REF: headRef || "",
-        // To allow raw --force (discouraged), set PI_ALLOW_FORCE=true in the workflow env.
-        PI_ALLOW_FORCE: process.env.PI_ALLOW_FORCE || "false",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+  // UX: mark the triggering comment with :eyes: while we work.
+  let didAddEyes = false;
+  if (mode === "comment" && triggerCommentId) {
+    await group("React :eyes:", async () => {
+      await addEyesReaction(owner, repo, triggerCommentId, token);
     });
-
-    if (piRes.status !== 0) {
-      throw new Error(`pi failed (exit ${piRes.status}):\n${piRes.stderr || piRes.stdout}`);
-    }
-
-    return (piRes.stdout || "").trim();
-  });
-
-  if (mode === "comment") {
-    const marker = stickyMarker;
-    const body = `${marker}\n\n${piOutput}`;
-
-    appendStepSummary(`## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\``);
-
-    await group("Post comment", async () => {
-      if (useStickyComment) {
-        await upsertStickyComment(owner, repo, prNumber, token, marker, body);
-      } else {
-        const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
-        await ghPostJson(url, token, { body });
-      }
-    });
-
-    // Done.
-  } else {
-    const review = safeJsonParse(piOutput);
-    const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
-    const commentsIn = Array.isArray(review.comments) ? review.comments : [];
-
-    appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\n${summary}`);
-
-    // Fetch PR file patches for inline comment mapping.
-    const prFiles = await group("Fetch PR file patches", async () => {
-      return await listPullFiles(owner, repo, prNumber, token);
-    });
-
-    const patchByPath = new Map();
-    for (const f of prFiles) patchByPath.set(f.filename, f.patch);
-
-    const comments = [];
-    for (const c of commentsIn.slice(0, maxComments)) {
-      const p = c?.path;
-      const line = c?.line;
-      const body = c?.body;
-      if (typeof p !== "string" || typeof body !== "string") continue;
-      if (typeof line !== "number" || !Number.isFinite(line) || line <= 0) continue;
-
-      const patch = patchByPath.get(p);
-      const pos = positionForNewLine(patch, line);
-      if (!pos) continue;
-
-      comments.push({ path: p, position: pos, body });
-    }
-
-    await group("Create GitHub review", async () => {
-      const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
-      await ghPostJson(url, token, {
-        commit_id: headSha,
-        event: "COMMENT",
-        body: summary,
-        ...(comments.length > 0 ? { comments } : {}),
-      });
-    });
+    didAddEyes = true;
   }
 
-  await group("Cleanup", async () => {
-    try {
-      sh("git", ["worktree", "remove", "--force", prDir]);
-    } catch {
-      // ignore
+  let piOutput;
+  try {
+    piOutput = await group("Run pi", async () => {
+      const piRes = spawnSync("pi", piArgs, {
+        cwd: prDir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          PI_REVIEW_ROOT: prDir,
+          PI_BASH_ALLOWLIST: bashAllowlist,
+          PI_PR_HEAD_REF: headRef || "",
+          // To allow raw --force (discouraged), set PI_ALLOW_FORCE=true in the workflow env.
+          PI_ALLOW_FORCE: process.env.PI_ALLOW_FORCE || "false",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      if (piRes.status !== 0) {
+        throw new Error(`pi failed (exit ${piRes.status}):\n${piRes.stderr || piRes.stdout}`);
+      }
+
+      return (piRes.stdout || "").trim();
+    });
+
+    if (mode === "comment") {
+      const marker = stickyMarker;
+      const body = `${marker}\n\n${piOutput}`;
+
+      appendStepSummary(`## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\``);
+
+      await group("Post comment", async () => {
+        if (useStickyComment) {
+          await upsertStickyComment(owner, repo, prNumber, token, marker, body);
+        } else {
+          const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+          await ghPostJson(url, token, { body });
+        }
+      });
+
+      // Done.
+    } else {
+      const review = safeJsonParse(piOutput);
+      const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
+      const commentsIn = Array.isArray(review.comments) ? review.comments : [];
+
+      appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\n${summary}`);
+
+      // Fetch PR file patches for inline comment mapping.
+      const prFiles = await group("Fetch PR file patches", async () => {
+        return await listPullFiles(owner, repo, prNumber, token);
+      });
+
+      const patchByPath = new Map();
+      for (const f of prFiles) patchByPath.set(f.filename, f.patch);
+
+      const comments = [];
+      for (const c of commentsIn.slice(0, maxComments)) {
+        const p = c?.path;
+        const line = c?.line;
+        const body = c?.body;
+        if (typeof p !== "string" || typeof body !== "string") continue;
+        if (typeof line !== "number" || !Number.isFinite(line) || line <= 0) continue;
+
+        const patch = patchByPath.get(p);
+        const pos = positionForNewLine(patch, line);
+        if (!pos) continue;
+
+        comments.push({ path: p, position: pos, body });
+      }
+
+      await group("Create GitHub review", async () => {
+        const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+        await ghPostJson(url, token, {
+          commit_id: headSha,
+          event: "COMMENT",
+          body: summary,
+          ...(comments.length > 0 ? { comments } : {}),
+        });
+      });
     }
-  });
+  } finally {
+    if (mode === "comment" && triggerCommentId && didAddEyes) {
+      await group("Remove :eyes:", async () => {
+        await removeEyesReaction(owner, repo, triggerCommentId, token);
+      });
+    }
+
+    await group("Cleanup", async () => {
+      try {
+        sh("git", ["worktree", "remove", "--force", prDir]);
+      } catch {
+        // ignore
+      }
+    });
+  }
 }
 
 main().catch((e) => {
