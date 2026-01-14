@@ -234,7 +234,7 @@ function validateGh(command: string, owner: string, repo: string, prNumber: stri
     let hasBody = false;
     for (let i = 4; i < args.length; i++) {
       const a = args[i];
-      if (a === "--body") {
+      if (a === "--body" || a === "-b") {
         hasBody = true;
         i++; // consume value
         continue;

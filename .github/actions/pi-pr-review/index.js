@@ -357,7 +357,11 @@ function readCommentPromptFile(actionDir, userRequest, options) {
   return raw
     .replaceAll("${PI_USER_REQUEST}", userRequest || "(empty)")
     .replaceAll("${PI_PR_BRANCH}", options?.branch || "(unknown)")
-    .replaceAll("${PI_CAN_PUSH}", options?.canPush ? "yes" : "no");
+    .replaceAll("${PI_CAN_PUSH}", options?.canPush ? "yes" : "no")
+    .replaceAll("${PI_TRIGGER_COMMENT_ID}", String(options?.triggerCommentId || ""))
+    .replaceAll("${PI_TRIGGER_COMMENT_URL}", String(options?.triggerCommentUrl || ""))
+    .replaceAll("${PI_TRIGGER_AUTHOR}", String(options?.triggerAuthor || ""))
+    .replaceAll("${PI_COMMENT_POSTING}", String(options?.commentPosting || "tools"));
 }
 
 function appendStepSummary(markdown) {
@@ -384,6 +388,7 @@ async function main() {
   let toolsRaw = getInput("tools", "read,grep,find,ls");
   let bashAllowlist = getInput("bash-allowlist", "");
   const maxComments = Math.max(0, Number(getInput("max-comments", process.env.PI_MAX_COMMENTS || "20")) || 20);
+  const commentPosting = getInput("comment-posting", "tools");
 
   let tools = "";
   let hasBash = false;
@@ -457,10 +462,15 @@ async function main() {
 
   const isFork = headRepoFullName && headRepoFullName !== `${owner}/${repo}`;
   if (mode === "comment" && isFork) {
-    // Can't push to forks. Still respond, but force read-only tools.
-    toolsRaw = "read,grep,find,ls";
-    bashAllowlist = "";
-    warn(`comment mode: PR is from fork (${headRepoFullName}); forcing read-only tools`);
+    // Fork PRs are not supported for pi-bot. Don't run the agent.
+    // (No secrets/pushing to forks. Keeping behavior simple.)
+    const triggerUrl = payload.comment?.html_url;
+    const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+    const body = `<!-- pi-bot -->\n\nSorry—fork PRs aren’t supported for @pi-bot in this repo.\n\n${triggerUrl ? `Triggered by: ${triggerUrl}` : ""}`.trim();
+    await group("Post fork notice", async () => {
+      await ghPostJson(url, token, { body });
+    });
+    return;
   }
 
   // Normalize tools after fork overrides.
@@ -573,7 +583,14 @@ async function main() {
 
   const extPath = path.join(actionDir, "ci-sandbox.ts");
   const prompt = mode === "comment"
-    ? readCommentPromptFile(actionDir, userRequest, { branch: headRef, canPush: !isFork })
+    ? readCommentPromptFile(actionDir, userRequest, {
+        branch: headRef,
+        canPush: !isFork,
+        triggerCommentId,
+        triggerCommentUrl: payload.comment?.html_url,
+        triggerAuthor: payload.comment?.user?.login || actor,
+        commentPosting,
+      })
     : readPromptFile(actionDir, maxComments);
 
   const piArgs = [
@@ -622,28 +639,37 @@ async function main() {
     });
 
     if (mode === "comment") {
-      const marker = stickyMarker;
-      const triggerUrl = payload.comment?.html_url;
-      const triggerAuthor = payload.comment?.user?.login || actor || "(unknown)";
-      const quote = quoteMarkdownBlock(payload.comment?.body, { maxLines: 30, maxChars: 2000 });
+      appendStepSummary(
+        `## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\`\n\nPosting: \`${commentPosting}\``,
+      );
 
-      const body = useStickyComment
-        ? `${marker}\n\n${piOutput}`
-        : `<!-- pi-bot reply-to:${triggerCommentId || ""} -->\n\n` +
-          (triggerUrl
-            ? `Replying to [@${triggerAuthor}'s comment](${triggerUrl}):\n\n${quote}\n\n---\n\n${piOutput}`
-            : `Replying to @${triggerAuthor}:\n\n${quote}\n\n---\n\n${piOutput}`);
+      if (commentPosting !== "tools") {
+        // Legacy behavior: action posts the model output.
+        const marker = stickyMarker;
+        const triggerUrl = payload.comment?.html_url;
+        const triggerAuthor = payload.comment?.user?.login || actor || "(unknown)";
+        const quote = quoteMarkdownBlock(payload.comment?.body, { maxLines: 30, maxChars: 2000 });
 
-      appendStepSummary(`## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\`\n\nSticky: \`${useStickyComment}\``);
+        const body = useStickyComment
+          ? `${marker}\n\n${piOutput}`
+          : `<!-- pi-bot reply-to:${triggerCommentId || ""} -->\n\n` +
+            (triggerUrl
+              ? `Replying to [@${triggerAuthor}'s comment](${triggerUrl}):\n\n${quote}\n\n---\n\n${piOutput}`
+              : `Replying to @${triggerAuthor}:\n\n${quote}\n\n---\n\n${piOutput}`);
 
-      await group("Post comment", async () => {
-        if (useStickyComment) {
-          await upsertStickyComment(owner, repo, prNumber, token, marker, body);
-        } else {
-          const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
-          await ghPostJson(url, token, { body });
-        }
-      });
+        await group("Post comment", async () => {
+          if (useStickyComment) {
+            await upsertStickyComment(owner, repo, prNumber, token, marker, body);
+          } else {
+            const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+            await ghPostJson(url, token, { body });
+          }
+        });
+      } else {
+        // Tool-driven mode: the agent should post via `gh pr comment` or other GitHub tools.
+        // We intentionally do not post piOutput.
+        appendStepSummary(`\n\n### pi stdout (not posted)\n\n\`\`\`\n${piOutput}\n\`\`\``);
+      }
 
       // Done.
     } else {

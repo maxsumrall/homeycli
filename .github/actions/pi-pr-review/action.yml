@@ -46,6 +46,11 @@ inputs:
     required: false
     default: "20"
 
+  comment-posting:
+    description: "Comment mode posting strategy: tools = agent must post via tools (gh/github tools); action = action posts pi stdout."
+    required: false
+    default: "tools"
+
 runs:
   using: node20
   main: index.js

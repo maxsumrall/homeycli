@@ -61,6 +61,7 @@ jobs:
           pi-version: latest
           provider: openrouter
           model: minimax/minimax-m2.1
+          comment-posting: tools
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
