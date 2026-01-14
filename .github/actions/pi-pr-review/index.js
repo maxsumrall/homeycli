@@ -304,17 +304,17 @@ async function addEyesReaction(owner, repo, commentId, token) {
   }
 }
 
-async function deleteReactionById(reactionId, token) {
+async function deleteIssueCommentReactionById(owner, repo, commentId, reactionId, token) {
   if (!reactionId) return;
-  // NOTE: delete endpoint is not repo-scoped.
-  const delUrl = `https://api.github.com/reactions/${reactionId}`;
+  // Delete endpoint is scoped to the comment.
+  const delUrl = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions/${reactionId}`;
   await ghRequestJson(delUrl, token, "DELETE");
 }
 
 async function removeEyesReaction(owner, repo, commentId, token, reactionId) {
   try {
     if (reactionId) {
-      await deleteReactionById(reactionId, token);
+      await deleteIssueCommentReactionById(owner, repo, commentId, reactionId, token);
       return;
     }
 
@@ -326,7 +326,7 @@ async function removeEyesReaction(owner, repo, commentId, token, reactionId) {
     );
     if (!mine?.id) return;
 
-    await deleteReactionById(mine.id, token);
+    await deleteIssueCommentReactionById(owner, repo, commentId, mine.id, token);
   } catch (e) {
     // Not fatal.
     warn(`failed to remove :eyes: reaction: ${e?.message || e}`);
@@ -464,26 +464,6 @@ async function main() {
   info(`pi-action: mode=${mode} PR #${prNumber} using ${provider}/${model} (pi ${piVersion})`);
   info(`pi-action: tools=${tools || "(none)"}${hasBash ? " (restricted bash enabled)" : ""}`);
 
-  await group("Install pi", async () => {
-    sh("npm", ["i", "-g", `@mariozechner/pi-coding-agent@${piVersion}`]);
-
-    // Ensure global npm bin is on PATH for subsequent spawnSync("pi").
-    // Newer npm versions removed `npm bin`, so fall back to prefix/bin.
-    let npmBin = "";
-    try {
-      npmBin = sh("npm", ["bin", "-g"]).trim();
-    } catch {
-      const prefix = sh("npm", ["prefix", "-g"]).trim();
-      if (prefix) npmBin = path.join(prefix, "bin");
-    }
-
-    if (npmBin && !process.env.PATH.split(":").includes(npmBin)) {
-      process.env.PATH = `${npmBin}:${process.env.PATH}`;
-    }
-
-    sh("pi", ["--version"]);
-  });
-
   // Comment-mode trigger check (after access control, before any heavy work)
   let userRequest;
   let triggerCommentId;
@@ -503,6 +483,40 @@ async function main() {
 
   // Create separate worktree for PR head.
   const prDir = path.resolve(".ai-pr-worktree");
+
+  // UX: mark the triggering comment with :eyes: while we work.
+  let didAddEyes = false;
+  let eyesReactionId;
+
+  let piOutput;
+  try {
+    // React as early as possible (after access control + trigger check) to improve UX.
+    if (mode === "comment" && triggerCommentId) {
+      await group("React :eyes:", async () => {
+        eyesReactionId = await addEyesReaction(owner, repo, triggerCommentId, token);
+      });
+      didAddEyes = true;
+    }
+
+    await group("Install pi", async () => {
+      sh("npm", ["i", "-g", `@mariozechner/pi-coding-agent@${piVersion}`]);
+
+      // Ensure global npm bin is on PATH for subsequent spawnSync("pi").
+      // Newer npm versions removed `npm bin`, so fall back to prefix/bin.
+      let npmBin = "";
+      try {
+        npmBin = sh("npm", ["bin", "-g"]).trim();
+      } catch {
+        const prefix = sh("npm", ["prefix", "-g"]).trim();
+        if (prefix) npmBin = path.join(prefix, "bin");
+      }
+
+      if (npmBin && !process.env.PATH.split(":").includes(npmBin)) {
+        process.env.PATH = `${npmBin}:${process.env.PATH}`;
+      }
+
+      sh("pi", ["--version"]);
+    });
 
   await group("Prepare PR worktree", async () => {
     try {
@@ -567,19 +581,7 @@ async function main() {
     prompt,
   ];
 
-  // UX: mark the triggering comment with :eyes: while we work.
-  let didAddEyes = false;
-  let eyesReactionId;
-  if (mode === "comment" && triggerCommentId) {
-    await group("React :eyes:", async () => {
-      eyesReactionId = await addEyesReaction(owner, repo, triggerCommentId, token);
-    });
-    didAddEyes = true;
-  }
-
-  let piOutput;
-  try {
-    piOutput = await group("Run pi", async () => {
+  piOutput = await group("Run pi", async () => {
       const piRes = spawnSync("pi", piArgs, {
         cwd: prDir,
         encoding: "utf-8",
