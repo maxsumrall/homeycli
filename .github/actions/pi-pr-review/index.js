@@ -208,6 +208,20 @@ function stripMarkdownImageAltText(content) {
   return content.replace(/!\[[^\]]*\]\(/g, "![](");
 }
 
+function quoteMarkdownBlock(text, { maxLines = 20, maxChars = 1200 } = {}) {
+  let t = sanitizeUserText(String(text || ""));
+  if (!t) return "";
+
+  const lines = t.split(/\r?\n/);
+  let sliced = lines.slice(0, maxLines).join("\n");
+  if (sliced.length > maxChars) sliced = sliced.slice(0, maxChars) + "…";
+
+  return sliced
+    .split("\n")
+    .map((line) => (line.trim().length === 0 ? ">" : `> ${line}`))
+    .join("\n");
+}
+
 function stripMarkdownLinkTitles(content) {
   content = content.replace(/(\[[^\]]*\]\([^)]+)\s+"[^"]*"/g, "$1");
   content = content.replace(/(\[[^\]]*\]\([^)]+)\s+'[^']*'/g, "$1");
@@ -605,9 +619,18 @@ async function main() {
 
     if (mode === "comment") {
       const marker = stickyMarker;
-      const body = `${marker}\n\n${piOutput}`;
+      const triggerUrl = payload.comment?.html_url;
+      const triggerAuthor = payload.comment?.user?.login || actor || "(unknown)";
+      const quote = quoteMarkdownBlock(payload.comment?.body, { maxLines: 30, maxChars: 2000 });
 
-      appendStepSummary(`## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\``);
+      const body = useStickyComment
+        ? `${marker}\n\n${piOutput}`
+        : `<!-- pi-bot reply-to:${triggerCommentId || ""} -->\n\n` +
+          (triggerUrl
+            ? `Replying to [@${triggerAuthor}'s comment](${triggerUrl}):\n\n${quote}\n\n---\n\n${piOutput}`
+            : `Replying to @${triggerAuthor}:\n\n${quote}\n\n---\n\n${piOutput}`);
+
+      appendStepSummary(`## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\`\n\nSticky: \`${useStickyComment}\``);
 
       await group("Post comment", async () => {
         if (useStickyComment) {

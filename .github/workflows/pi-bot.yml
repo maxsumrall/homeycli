@@ -30,7 +30,7 @@ jobs:
         with:
           mode: comment
           trigger-phrase: '@pi-bot'
-          use-sticky-comment: true
+          use-sticky-comment: false
           tools: read,grep,find,ls,edit,write,bash
           bash-allowlist: |
             # Git

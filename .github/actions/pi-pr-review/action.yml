@@ -13,7 +13,7 @@ inputs:
   use-sticky-comment:
     description: "If true in comment mode, create/update a single sticky comment instead of posting new comments."
     required: false
-    default: "true"
+    default: "false"
   sticky-comment-marker:
     description: "Hidden marker used to find the sticky comment."
     required: false

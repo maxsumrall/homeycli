@@ -25,6 +25,7 @@ If the user asks you to implement changes and Can push commits is "yes":
 
 Respond with a helpful markdown comment.
 - Be concise but specific.
+- Assume your response will be posted as a new PR comment that quotes the triggering comment.
 - If you need more info, ask targeted questions.
 - If the user request is ambiguous, state assumptions.
 - Do NOT output JSON.

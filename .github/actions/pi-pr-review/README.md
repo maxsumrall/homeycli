@@ -72,4 +72,5 @@ Notes:
 
 - Inline comments are **best effort**: GitHub omits `patch` for large diffs/binary files, which prevents line→position mapping.
 - Comment mode adds a temporary `:eyes:` reaction to the triggering comment while the bot is running, and removes it when finished.
+- Comment mode defaults to posting a new PR comment that quotes the triggering comment (sticky comments are optional).
 - This action expects to run on `pull_request_target` events (PR review mode) or `issue_comment` events on PRs (comment mode) so it can access secrets.
