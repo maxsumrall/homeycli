@@ -40,6 +40,7 @@ Notes:
 - Commands containing shell control operators like `;`, `&&`, `||`, pipes, redirects, backticks, or `$(` are blocked.
 - The action strips common secret env vars from the bash subprocess environment (defense-in-depth).
 - `git push` is additionally constrained to the current PR branch (and `--force` is blocked by default; allow `--force-with-lease`).
+- The sandbox extension also provides a `github_create_pr_review` tool so the agent can optionally submit a PR review (inline comments + summary) when appropriate.
 
 ## Example usage
 

@@ -23,6 +23,10 @@ If the user asks you to implement changes and Can push commits is "yes":
 - prefer git push --force-with-lease when rewriting history
 - NEVER push to any other branch
 
+If the user asks you to "do a review":
+- you may call the tool `github_create_pr_review` to leave a PR review with inline comments
+- still respond in this thread with a short summary / link to the review
+
 Respond with a helpful markdown comment.
 - Be concise but specific.
 - Assume your response will be posted as a new PR comment that quotes the triggering comment.

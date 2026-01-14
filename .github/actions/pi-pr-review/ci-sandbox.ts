@@ -266,6 +266,155 @@ async function runRestrictedBash(command: string, cwd: string, timeoutSeconds?: 
 }
 
 export default function (pi: ExtensionAPI) {
+  // ---------------------------------------------------------------------------
+  // GitHub tools (safe, repo-scoped)
+  // ---------------------------------------------------------------------------
+
+  function mustEnv(name: string): string {
+    const v = process.env[name];
+    if (!v) throw new Error(`Blocked: missing required env var: ${name}`);
+    return v;
+  }
+
+  async function ghRequest(method: string, url: string, body?: any) {
+    const token = mustEnv("GITHUB_TOKEN");
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+    const text = await res.text();
+    if (!res.ok) throw new Error(`GitHub API ${method} error ${res.status} for ${url}: ${text}`);
+    return text ? JSON.parse(text) : {};
+  }
+
+  function positionForNewLine(patch: string | undefined, targetLine: number): number | null {
+    if (!patch) return null;
+
+    const lines = patch.split("\n");
+    let position = 0;
+    let newLine = 0;
+
+    for (const raw of lines) {
+      const line = raw.replace(/\r$/, "");
+      position++;
+
+      if (line.startsWith("@@")) {
+        const m = /\+([0-9]+)(?:,([0-9]+))?/.exec(line);
+        if (m) newLine = Number(m[1]) - 1;
+        continue;
+      }
+
+      if (line.startsWith("+++ ") || line.startsWith("--- ")) continue;
+
+      if (line.startsWith("+")) {
+        newLine++;
+        if (newLine === targetLine) return position;
+        continue;
+      }
+
+      if (line.startsWith("-")) continue;
+
+      if (line === "") continue;
+      newLine++;
+      if (newLine === targetLine) return position;
+    }
+
+    return null;
+  }
+
+  async function listPullFiles(owner: string, repo: string, prNumber: string): Promise<any[]> {
+    const out: any[] = [];
+    let page = 1;
+    for (;;) {
+      const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`;
+      const batch = await ghRequest("GET", url);
+      out.push(...batch);
+      if (batch.length < 100) break;
+      page++;
+    }
+    return out;
+  }
+
+  pi.registerTool({
+    name: "github_create_pr_review",
+    label: "github_create_pr_review",
+    description:
+      "Create a PR review (COMMENT-only) on the current PR. " +
+      "Optionally includes inline comments by file path + new-line number. " +
+      "This tool is repo-scoped and PR-scoped.",
+    parameters: Type.Object({
+      body: Type.String({ description: "Review summary markdown" }),
+      comments: Type.Optional(
+        Type.Array(
+          Type.Object({
+            path: Type.String({ description: "File path in repo" }),
+            line: Type.Number({ description: "Line number in the new file (RIGHT side)" }),
+            body: Type.String({ description: "Inline comment markdown" }),
+          }),
+        ),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const owner = mustEnv("PI_GH_OWNER");
+      const repo = mustEnv("PI_GH_REPO");
+      const prNumber = mustEnv("PI_PR_NUMBER");
+      const headSha = mustEnv("PI_PR_HEAD_SHA");
+
+      const summary = String((params as any).body ?? "").trim();
+      if (!summary) throw new Error("Blocked: review body is empty");
+
+      const commentsIn = Array.isArray((params as any).comments) ? (params as any).comments : [];
+
+      // Fetch PR file patches for mapping line -> position.
+      const prFiles = await listPullFiles(owner, repo, prNumber);
+      const patchByPath = new Map<string, string | undefined>();
+      for (const f of prFiles) patchByPath.set(String(f.filename), f.patch);
+
+      const comments: Array<{ path: string; position: number; body: string }> = [];
+      for (const c of commentsIn.slice(0, 50)) {
+        const p = String(c?.path ?? "");
+        const body = String(c?.body ?? "");
+        const line = Number(c?.line);
+        if (!p || !body) continue;
+        if (!Number.isFinite(line) || line <= 0) continue;
+
+        const patch = patchByPath.get(p);
+        const pos = positionForNewLine(patch, line);
+        if (!pos) continue;
+
+        comments.push({ path: p, position: pos, body });
+      }
+
+      const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+      const res = await ghRequest("POST", url, {
+        commit_id: headSha,
+        event: "COMMENT",
+        body: summary,
+        ...(comments.length > 0 ? { comments } : {}),
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Created PR review${res?.html_url ? `: ${res.html_url}` : "."}`,
+          },
+        ],
+        details: { reviewId: res?.id, url: res?.html_url, inlineComments: comments.length },
+      };
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Restricted bash tool
+  // ---------------------------------------------------------------------------
+
   // Override the built-in bash tool with a restricted version.
   // Only active if the caller includes `bash` in --tools.
   pi.registerTool({

@@ -604,6 +604,10 @@ async function main() {
           PI_REVIEW_ROOT: prDir,
           PI_BASH_ALLOWLIST: bashAllowlist,
           PI_PR_HEAD_REF: headRef || "",
+          PI_GH_OWNER: owner,
+          PI_GH_REPO: repo,
+          PI_PR_NUMBER: String(prNumber),
+          PI_PR_HEAD_SHA: headSha || "",
           // To allow raw --force (discouraged), set PI_ALLOW_FORCE=true in the workflow env.
           PI_ALLOW_FORCE: process.env.PI_ALLOW_FORCE || "false",
         },
