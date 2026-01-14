@@ -292,27 +292,41 @@ async function upsertStickyComment(owner, repo, issueNumber, token, marker, body
 }
 
 async function addEyesReaction(owner, repo, commentId, token) {
-  // Reactions API (stable), still accepts the old preview header, but we just use vnd.github+json.
+  // Reactions API (stable)
   const url = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`;
   try {
-    await ghPostJson(url, token, { content: "eyes" });
+    const res = await ghPostJson(url, token, { content: "eyes" });
+    return res?.id;
   } catch (e) {
     // Not fatal.
     warn(`failed to add :eyes: reaction: ${e?.message || e}`);
+    return undefined;
   }
 }
 
-async function removeEyesReaction(owner, repo, commentId, token) {
-  const listUrl = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions?per_page=100`;
+async function deleteReactionById(reactionId, token) {
+  if (!reactionId) return;
+  // NOTE: delete endpoint is not repo-scoped.
+  const delUrl = `https://api.github.com/reactions/${reactionId}`;
+  await ghRequestJson(delUrl, token, "DELETE");
+}
+
+async function removeEyesReaction(owner, repo, commentId, token, reactionId) {
   try {
+    if (reactionId) {
+      await deleteReactionById(reactionId, token);
+      return;
+    }
+
+    // Fallback: list reactions and delete our :eyes:
+    const listUrl = `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}/reactions?per_page=100`;
     const reactions = await ghFetchJson(listUrl, token);
     const mine = (Array.isArray(reactions) ? reactions : []).find(
       (r) => r?.content === "eyes" && r?.user?.login === "github-actions[bot]",
     );
     if (!mine?.id) return;
 
-    const delUrl = `https://api.github.com/repos/${owner}/${repo}/reactions/${mine.id}`;
-    await ghRequestJson(delUrl, token, "DELETE");
+    await deleteReactionById(mine.id, token);
   } catch (e) {
     // Not fatal.
     warn(`failed to remove :eyes: reaction: ${e?.message || e}`);
@@ -555,9 +569,10 @@ async function main() {
 
   // UX: mark the triggering comment with :eyes: while we work.
   let didAddEyes = false;
+  let eyesReactionId;
   if (mode === "comment" && triggerCommentId) {
     await group("React :eyes:", async () => {
-      await addEyesReaction(owner, repo, triggerCommentId, token);
+      eyesReactionId = await addEyesReaction(owner, repo, triggerCommentId, token);
     });
     didAddEyes = true;
   }
@@ -645,7 +660,7 @@ async function main() {
   } finally {
     if (mode === "comment" && triggerCommentId && didAddEyes) {
       await group("Remove :eyes:", async () => {
-        await removeEyesReaction(owner, repo, triggerCommentId, token);
+        await removeEyesReaction(owner, repo, triggerCommentId, token, eyesReactionId);
       });
     }
 
