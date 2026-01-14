@@ -7,6 +7,11 @@ PR branch: ${PI_PR_BRANCH}
 Can push commits: ${PI_CAN_PUSH}
 Posting mode: ${PI_COMMENT_POSTING}
 Run marker: ${PI_RUN_MARKER}
+
+Conversation continuity:
+- This chat is persisted per PR.
+- You may be resuming prior context from earlier runs.
+
 Trigger comment id: ${PI_TRIGGER_COMMENT_ID}
 Trigger comment url: ${PI_TRIGGER_COMMENT_URL}
 Trigger author: ${PI_TRIGGER_AUTHOR}

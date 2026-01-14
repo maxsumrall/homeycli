@@ -6,6 +6,10 @@ PR number: ${PI_PR_NUMBER}
 PR head sha: ${PI_PR_HEAD_SHA}
 Run marker: ${PI_RUN_MARKER}
 
+Conversation continuity:
+- This chat is persisted per PR.
+- You may be resuming prior context from earlier runs.
+
 Goal: Perform a thoughtful PR review and leave feedback on GitHub.
 
 You have access to:

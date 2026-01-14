@@ -662,9 +662,18 @@ async function main() {
       ? readPrReviewPromptFile(actionDir, { prNumber, headSha, runMarker })
       : readPromptFile(actionDir, maxComments, { runMarker });
 
+  const agentDir = process.env.PI_CODING_AGENT_DIR || path.resolve(".pi-agent");
+  const sessionFile = process.env.PI_SESSION_FILE || path.join(agentDir, "sessions", `pr-${prNumber}.jsonl`);
+  try {
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  } catch {
+    // ignore
+  }
+
   const piArgs = [
     "-p",
-    "--no-session",
+    "--session",
+    sessionFile,
     "--no-extensions",
     "--no-skills",
     "-e",
@@ -701,6 +710,8 @@ async function main() {
           PI_TRIGGER_COMMENT_ID: String(triggerCommentId || ""),
           PI_TRIGGER_COMMENT_URL: String(triggerCommentUrl || ""),
           PI_TRIGGER_AUTHOR: String(triggerAuthor || ""),
+          PI_CODING_AGENT_DIR: agentDir,
+          PI_SESSION_FILE: sessionFile,
           // To allow raw --force (discouraged), set PI_ALLOW_FORCE=true in the workflow env.
           PI_ALLOW_FORCE: process.env.PI_ALLOW_FORCE || "false",
         },

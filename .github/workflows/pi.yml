@@ -12,13 +12,18 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: read
 
 concurrency:
-  group: pi-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  group: pi-global
+  cancel-in-progress: false
 
 jobs:
   pi:
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/.pi-agent
+      PI_SESSION_FILE: ${{ github.workspace }}/.pi-agent/sessions/pr-${{ github.event.pull_request.number || github.event.issue.number }}.jsonl
     if: |
       (
         github.event_name == 'pull_request_target' &&
@@ -46,6 +51,53 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.event.repository.default_branch }}
           fetch-depth: 0
+
+      - name: Restore pi session (if any)
+        id: restore_session
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR/sessions"
+
+          # Find the newest artifact named pi-session-pr-$PR_NUMBER
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --jq \
+            ".artifacts
+             | map(select(.expired == false and .name == \"pi-session-pr-${PR_NUMBER}\"))
+             | sort_by(.created_at)
+             | (.[-1].workflow_run.id // empty)"
+          )
+
+          if [ -z "$run_id" ]; then
+            echo "No existing session artifact found."
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found prior session in workflow run: $run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download pi session artifact
+        if: steps.restore_session.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: pi-session-pr-${{ env.PR_NUMBER }}
+          run-id: ${{ steps.restore_session.outputs.run_id }}
+          path: .
+
+      - name: Normalize session file location
+        if: steps.restore_session.outputs.run_id != ''
+        run: |
+          set -euo pipefail
+          mkdir -p "$PI_CODING_AGENT_DIR/sessions"
+          # The downloaded artifact may land in different subfolders depending on action behavior.
+          found=$(find . -maxdepth 6 -type f -name "pr-${PR_NUMBER}.jsonl" | head -n 1 || true)
+          if [ -z "$found" ]; then
+            echo "Could not find downloaded session file pr-${PR_NUMBER}.jsonl"
+            exit 1
+          fi
+          mv "$found" "$PI_SESSION_FILE"
+          echo "Restored session to $PI_SESSION_FILE"
 
       # Comment-triggered (PR timeline comments + inline diff comments)
       - name: pi-bot (comment mode)
@@ -107,3 +159,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PI_SKIP_VERSION_CHECK: "1"
+
+      - name: Save pi session artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-session-pr-${{ env.PR_NUMBER }}
+          path: ${{ env.PI_SESSION_FILE }}
+          if-no-files-found: ignore
+          retention-days: 7
