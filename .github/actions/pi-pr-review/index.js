@@ -182,6 +182,38 @@ async function listPullFiles(owner, repo, prNumber, token) {
   return out;
 }
 
+async function listPullReviews(owner, repo, prNumber, token) {
+  const out = [];
+  let page = 1;
+  for (;;) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100&page=${page}`;
+    const batch = await ghFetchJson(url, token);
+    out.push(...batch);
+    if (batch.length < 100) break;
+    page++;
+  }
+  return out;
+}
+
+async function listPullReviewComments(owner, repo, prNumber, token) {
+  const out = [];
+  let page = 1;
+  for (;;) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100&page=${page}`;
+    const batch = await ghFetchJson(url, token);
+    out.push(...batch);
+    if (batch.length < 100) break;
+    page++;
+  }
+  return out;
+}
+
+function wasCreatedAfter(iso, item) {
+  const t = item?.created_at;
+  if (!t) return false;
+  return new Date(t).getTime() >= new Date(iso).getTime();
+}
+
 async function getUserPermission(owner, repo, username, token) {
   const url = `https://api.github.com/repos/${owner}/${repo}/collaborators/${encodeURIComponent(username)}/permission`;
   const res = await ghFetchJson(url, token);
@@ -347,9 +379,20 @@ async function removeEyesReaction(owner, repo, commentId, token, reactionId) {
   }
 }
 
-function readPromptFile(actionDir, maxComments) {
+function readPromptFile(actionDir, maxComments, options) {
+  // Legacy JSON prompt used when pr-review-posting=action
   const raw = fs.readFileSync(path.join(actionDir, "prompt.txt"), "utf-8");
-  return raw.replaceAll("${PI_MAX_COMMENTS}", String(maxComments));
+  return raw
+    .replaceAll("${PI_MAX_COMMENTS}", String(maxComments))
+    .replaceAll("${PI_RUN_MARKER}", options?.runMarker || "");
+}
+
+function readPrReviewPromptFile(actionDir, options) {
+  const raw = fs.readFileSync(path.join(actionDir, "prompt-pr-review.txt"), "utf-8");
+  return raw
+    .replaceAll("${PI_PR_NUMBER}", String(options?.prNumber || ""))
+    .replaceAll("${PI_PR_HEAD_SHA}", String(options?.headSha || ""))
+    .replaceAll("${PI_RUN_MARKER}", String(options?.runMarker || ""));
 }
 
 function readCommentPromptFile(actionDir, userRequest, options) {
@@ -358,10 +401,12 @@ function readCommentPromptFile(actionDir, userRequest, options) {
     .replaceAll("${PI_USER_REQUEST}", userRequest || "(empty)")
     .replaceAll("${PI_PR_BRANCH}", options?.branch || "(unknown)")
     .replaceAll("${PI_CAN_PUSH}", options?.canPush ? "yes" : "no")
+    .replaceAll("${PI_TRIGGER_KIND}", String(options?.triggerKind || "issue_comment"))
     .replaceAll("${PI_TRIGGER_COMMENT_ID}", String(options?.triggerCommentId || ""))
     .replaceAll("${PI_TRIGGER_COMMENT_URL}", String(options?.triggerCommentUrl || ""))
     .replaceAll("${PI_TRIGGER_AUTHOR}", String(options?.triggerAuthor || ""))
-    .replaceAll("${PI_COMMENT_POSTING}", String(options?.commentPosting || "tools"));
+    .replaceAll("${PI_COMMENT_POSTING}", String(options?.commentPosting || "tools"))
+    .replaceAll("${PI_RUN_MARKER}", String(options?.runMarker || ""));
 }
 
 function appendStepSummary(markdown) {
@@ -389,6 +434,7 @@ async function main() {
   let bashAllowlist = getInput("bash-allowlist", "");
   const maxComments = Math.max(0, Number(getInput("max-comments", process.env.PI_MAX_COMMENTS || "20")) || 20);
   const commentPosting = getInput("comment-posting", "tools");
+  const prReviewPosting = getInput("pr-review-posting", "tools");
 
   let tools = "";
   let hasBash = false;
@@ -403,6 +449,7 @@ async function main() {
   });
 
   const eventPath = mustEnv("GITHUB_EVENT_PATH");
+  const eventName = mustEnv("GITHUB_EVENT_NAME");
   const payload = JSON.parse(fs.readFileSync(eventPath, "utf-8"));
 
   const repoFull = mustEnv("GITHUB_REPOSITORY");
@@ -410,13 +457,15 @@ async function main() {
 
   // Determine execution mode
   // - PR events (pull_request_target): payload.pull_request present
-  // - Comment mode: issue_comment on a PR: payload.issue.pull_request present
+  // - Issue comment mode: issue_comment on a PR: payload.issue.pull_request present
+  // - Review comment mode: pull_request_review_comment: payload.pull_request + payload.comment
   const isPrEvent = !!payload.pull_request;
-  const isIssueCommentOnPr = !!payload.issue?.pull_request && !!payload.comment;
+  const isIssueCommentOnPr = eventName === "issue_comment" && !!payload.issue?.pull_request && !!payload.comment;
+  const isReviewCommentOnPr = eventName === "pull_request_review_comment" && !!payload.pull_request && !!payload.comment;
 
   let mode = String(modeInput || "auto");
   if (mode === "auto") {
-    mode = isIssueCommentOnPr ? "comment" : "pr-review";
+    mode = isIssueCommentOnPr || isReviewCommentOnPr ? "comment" : "pr-review";
   }
 
   // Access control like claude-code-action: only allow users with write-ish permissions.
@@ -451,6 +500,13 @@ async function main() {
   } else if (isIssueCommentOnPr) {
     prNumber = payload.issue.number;
     const pr = await ghFetchJson(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, token);
+    baseSha = pr.base.sha;
+    headSha = pr.head.sha;
+    headRef = pr.head.ref;
+    headRepoFullName = pr.head.repo?.full_name;
+  } else if (isReviewCommentOnPr) {
+    const pr = payload.pull_request;
+    prNumber = pr.number;
     baseSha = pr.base.sha;
     headSha = pr.head.sha;
     headRef = pr.head.ref;
@@ -491,7 +547,11 @@ async function main() {
   // Comment-mode trigger check (after access control, before any heavy work)
   let userRequest;
   let triggerCommentId;
+  let triggerCommentUrl;
+  let triggerAuthor;
+  let triggerKind;
   if (mode === "comment") {
+    triggerKind = isReviewCommentOnPr ? "review_comment" : "issue_comment";
     userRequest = extractUserRequest(payload.comment?.body, triggerPhrase);
     if (!userRequest) {
       warn(`comment mode: trigger phrase '${triggerPhrase}' not found or empty request; skipping`);
@@ -499,14 +559,19 @@ async function main() {
     }
 
     triggerCommentId = payload.comment?.id;
+    triggerCommentUrl = payload.comment?.html_url;
+    triggerAuthor = payload.comment?.user?.login || actor;
 
     if (isFork) {
-      userRequest = `[NOTE: PR is from a fork (${headRepoFullName}). I cannot push commits; I will only comment with suggestions.]\n\n${userRequest}`;
+      userRequest = `[NOTE: PR is from a fork (${headRepoFullName}).]\n\n${userRequest}`;
     }
   }
 
   // Create separate worktree for PR head.
   const prDir = path.resolve(".ai-pr-worktree");
+
+  // Run marker used to verify tool-driven posting (and for troubleshooting)
+  const runMarker = `<!-- pi-bot run:${process.env.GITHUB_RUN_ID || ""} attempt:${process.env.GITHUB_RUN_ATTEMPT || ""} -->`;
 
   // UX: mark the triggering comment with :eyes: while we work.
   let didAddEyes = false;
@@ -515,7 +580,7 @@ async function main() {
   let piOutput;
   try {
     // React as early as possible (after access control + trigger check) to improve UX.
-    if (mode === "comment" && triggerCommentId) {
+    if (mode === "comment" && triggerCommentId && triggerKind === "issue_comment") {
       await group("React :eyes:", async () => {
         eyesReactionId = await addEyesReaction(owner, repo, triggerCommentId, token);
       });
@@ -586,12 +651,16 @@ async function main() {
     ? readCommentPromptFile(actionDir, userRequest, {
         branch: headRef,
         canPush: !isFork,
+        triggerKind,
         triggerCommentId,
-        triggerCommentUrl: payload.comment?.html_url,
-        triggerAuthor: payload.comment?.user?.login || actor,
+        triggerCommentUrl,
+        triggerAuthor,
         commentPosting,
+        runMarker,
       })
-    : readPromptFile(actionDir, maxComments);
+    : prReviewPosting === "tools"
+      ? readPrReviewPromptFile(actionDir, { prNumber, headSha, runMarker })
+      : readPromptFile(actionDir, maxComments, { runMarker });
 
   const piArgs = [
     "-p",
@@ -612,6 +681,8 @@ async function main() {
     prompt,
   ];
 
+  const startIso = new Date().toISOString();
+
   piOutput = await group("Run pi", async () => {
       const piRes = spawnSync("pi", piArgs, {
         cwd: prDir,
@@ -625,6 +696,11 @@ async function main() {
           PI_GH_REPO: repo,
           PI_PR_NUMBER: String(prNumber),
           PI_PR_HEAD_SHA: headSha || "",
+          PI_RUN_MARKER: runMarker,
+          PI_TRIGGER_KIND: triggerKind || "",
+          PI_TRIGGER_COMMENT_ID: String(triggerCommentId || ""),
+          PI_TRIGGER_COMMENT_URL: String(triggerCommentUrl || ""),
+          PI_TRIGGER_AUTHOR: String(triggerAuthor || ""),
           // To allow raw --force (discouraged), set PI_ALLOW_FORCE=true in the workflow env.
           PI_ALLOW_FORCE: process.env.PI_ALLOW_FORCE || "false",
         },
@@ -640,21 +716,19 @@ async function main() {
 
     if (mode === "comment") {
       appendStepSummary(
-        `## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\`\n\nPosting: \`${commentPosting}\``,
+        `## pi-action (comment mode)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nTrigger: \`${triggerPhrase}\`\n\nPosting: \`${commentPosting}\`\n\nRun marker: \`${runMarker}\``,
       );
 
       if (commentPosting !== "tools") {
         // Legacy behavior: action posts the model output.
         const marker = stickyMarker;
-        const triggerUrl = payload.comment?.html_url;
-        const triggerAuthor = payload.comment?.user?.login || actor || "(unknown)";
         const quote = quoteMarkdownBlock(payload.comment?.body, { maxLines: 30, maxChars: 2000 });
 
         const body = useStickyComment
           ? `${marker}\n\n${piOutput}`
-          : `<!-- pi-bot reply-to:${triggerCommentId || ""} -->\n\n` +
-            (triggerUrl
-              ? `Replying to [@${triggerAuthor}'s comment](${triggerUrl}):\n\n${quote}\n\n---\n\n${piOutput}`
+          : `${runMarker}\n<!-- pi-bot reply-to:${triggerCommentId || ""} -->\n\n` +
+            (triggerCommentUrl
+              ? `Replying to [@${triggerAuthor}'s comment](${triggerCommentUrl}):\n\n${quote}\n\n---\n\n${piOutput}`
               : `Replying to @${triggerAuthor}:\n\n${quote}\n\n---\n\n${piOutput}`);
 
         await group("Post comment", async () => {
@@ -666,51 +740,95 @@ async function main() {
           }
         });
       } else {
-        // Tool-driven mode: the agent should post via `gh pr comment` or other GitHub tools.
-        // We intentionally do not post piOutput.
+        // Tool-driven mode: the agent should post via `gh pr comment` or GitHub tools.
         appendStepSummary(`\n\n### pi stdout (not posted)\n\n\`\`\`\n${piOutput}\n\`\`\``);
+      }
+
+      // Verify something was posted; if not, fallback.
+      const didPost = await group("Verify GitHub output", async () => {
+        const [issueComments, reviewComments, reviews] = await Promise.all([
+          listIssueComments(owner, repo, prNumber, token),
+          listPullReviewComments(owner, repo, prNumber, token),
+          listPullReviews(owner, repo, prNumber, token),
+        ]);
+
+        return (
+          issueComments.some((c) => wasCreatedAfter(startIso, c) && String(c?.body || "").includes(runMarker)) ||
+          reviewComments.some((c) => wasCreatedAfter(startIso, c) && String(c?.body || "").includes(runMarker)) ||
+          reviews.some((r) => wasCreatedAfter(startIso, r) && String(r?.body || "").includes(runMarker))
+        );
+      });
+
+      if (!didPost) {
+        await group("Fallback: post failure notice", async () => {
+          const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+          const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          const body = `${runMarker}\n\nI ran, but didn’t manage to post a response via tools. See logs: ${runUrl}`;
+          await ghPostJson(url, token, { body });
+        });
       }
 
       // Done.
     } else {
-      const review = safeJsonParse(piOutput);
-      const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
-      const commentsIn = Array.isArray(review.comments) ? review.comments : [];
+      appendStepSummary(
+        `## pi-pr-review\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\nPosting: \`${prReviewPosting}\`\n\nRun marker: \`${runMarker}\``,
+      );
 
-      appendStepSummary(`## pi-pr-review (comment-only)\n\nModel: \`${provider}/${model}\`\n\nTools: \`${tools}\`\n\n${summary}`);
+      if (prReviewPosting !== "tools") {
+        // Legacy JSON behavior
+        const review = safeJsonParse(piOutput);
+        const summary = typeof review.summary === "string" ? review.summary : "(no summary)";
+        const commentsIn = Array.isArray(review.comments) ? review.comments : [];
 
-      // Fetch PR file patches for inline comment mapping.
-      const prFiles = await group("Fetch PR file patches", async () => {
-        return await listPullFiles(owner, repo, prNumber, token);
-      });
+        const prFiles = await group("Fetch PR file patches", async () => {
+          return await listPullFiles(owner, repo, prNumber, token);
+        });
 
-      const patchByPath = new Map();
-      for (const f of prFiles) patchByPath.set(f.filename, f.patch);
+        const patchByPath = new Map();
+        for (const f of prFiles) patchByPath.set(f.filename, f.patch);
 
-      const comments = [];
-      for (const c of commentsIn.slice(0, maxComments)) {
-        const p = c?.path;
-        const line = c?.line;
-        const body = c?.body;
-        if (typeof p !== "string" || typeof body !== "string") continue;
-        if (typeof line !== "number" || !Number.isFinite(line) || line <= 0) continue;
+        const comments = [];
+        for (const c of commentsIn.slice(0, maxComments)) {
+          const p = c?.path;
+          const line = c?.line;
+          const body = c?.body;
+          if (typeof p !== "string" || typeof body !== "string") continue;
+          if (typeof line !== "number" || !Number.isFinite(line) || line <= 0) continue;
 
-        const patch = patchByPath.get(p);
-        const pos = positionForNewLine(patch, line);
-        if (!pos) continue;
+          const patch = patchByPath.get(p);
+          const pos = positionForNewLine(patch, line);
+          if (!pos) continue;
 
-        comments.push({ path: p, position: pos, body });
+          comments.push({ path: p, position: pos, body });
+        }
+
+        await group("Create GitHub review", async () => {
+          const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+          await ghPostJson(url, token, {
+            commit_id: headSha,
+            event: "COMMENT",
+            body: `${runMarker}\n\n${summary}`,
+            ...(comments.length > 0 ? { comments } : {}),
+          });
+        });
+      } else {
+        // Tool-driven mode: agent should call github_create_pr_review.
+        appendStepSummary(`\n\n### pi stdout (not posted)\n\n\`\`\`\n${piOutput}\n\`\`\``);
       }
 
-      await group("Create GitHub review", async () => {
-        const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
-        await ghPostJson(url, token, {
-          commit_id: headSha,
-          event: "COMMENT",
-          body: summary,
-          ...(comments.length > 0 ? { comments } : {}),
-        });
+      const didPost = await group("Verify GitHub output", async () => {
+        const reviews = await listPullReviews(owner, repo, prNumber, token);
+        return reviews.some((r) => wasCreatedAfter(startIso, r) && String(r?.body || "").includes(runMarker));
       });
+
+      if (!didPost) {
+        await group("Fallback: post failure notice", async () => {
+          const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+          const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          const body = `${runMarker}\n\nI ran a PR review job but didn’t manage to publish a review. See logs: ${runUrl}`;
+          await ghPostJson(url, token, { body });
+        });
+      }
     }
   } finally {
     if (mode === "comment" && triggerCommentId && didAddEyes) {

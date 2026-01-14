@@ -498,6 +498,50 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "github_reply_pr_review_comment",
+    label: "github_reply_pr_review_comment",
+    description:
+      "Reply to an existing PR review comment (inline diff comment) on the current PR. " +
+      "This tool is repo-scoped and PR-scoped.",
+    parameters: Type.Object({
+      comment_id: Type.Number({ description: "The PR review comment id to reply to" }),
+      body: Type.String({ description: "Reply markdown" }),
+    }),
+    async execute(_toolCallId, params) {
+      const owner = mustEnv("PI_GH_OWNER");
+      const repo = mustEnv("PI_GH_REPO");
+      const prNumber = mustEnv("PI_PR_NUMBER");
+
+      const commentId = Number((params as any).comment_id);
+      const body = String((params as any).body ?? "").trim();
+
+      if (!Number.isFinite(commentId) || commentId <= 0) {
+        throw new Error("Blocked: invalid comment_id");
+      }
+      if (!body) throw new Error("Blocked: reply body is empty");
+
+      // Verify comment belongs to current PR.
+      const commentUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/comments/${commentId}`;
+      const comment = await ghRequest("GET", commentUrl);
+      const prUrl = String(comment?.pull_request_url || "");
+      if (!prUrl.endsWith(`/pulls/${prNumber}`)) {
+        throw new Error(`Blocked: review comment ${commentId} does not belong to PR #${prNumber}`);
+      }
+
+      const createUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/comments`;
+      const res = await ghRequest("POST", createUrl, {
+        body,
+        in_reply_to: commentId,
+      });
+
+      return {
+        content: [{ type: "text", text: `Replied to review comment${res?.html_url ? `: ${res.html_url}` : "."}` }],
+        details: { commentId: res?.id, url: res?.html_url, inReplyTo: commentId },
+      };
+    },
+  });
+
   // ---------------------------------------------------------------------------
   // Restricted bash tool
   // ---------------------------------------------------------------------------

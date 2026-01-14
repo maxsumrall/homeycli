@@ -51,6 +51,11 @@ inputs:
     required: false
     default: "tools"
 
+  pr-review-posting:
+    description: "PR review posting strategy: tools = agent must post via GitHub tools; action = action posts based on JSON output (legacy)."
+    required: false
+    default: "tools"
+
 runs:
   using: node20
   main: index.js
