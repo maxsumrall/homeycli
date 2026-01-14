@@ -454,7 +454,15 @@ async function main() {
     sh("npm", ["i", "-g", `@mariozechner/pi-coding-agent@${piVersion}`]);
 
     // Ensure global npm bin is on PATH for subsequent spawnSync("pi").
-    const npmBin = sh("npm", ["bin", "-g"]).trim();
+    // Newer npm versions removed `npm bin`, so fall back to prefix/bin.
+    let npmBin = "";
+    try {
+      npmBin = sh("npm", ["bin", "-g"]).trim();
+    } catch {
+      const prefix = sh("npm", ["prefix", "-g"]).trim();
+      if (prefix) npmBin = path.join(prefix, "bin");
+    }
+
     if (npmBin && !process.env.PATH.split(":").includes(npmBin)) {
       process.env.PATH = `${npmBin}:${process.env.PATH}`;
     }
