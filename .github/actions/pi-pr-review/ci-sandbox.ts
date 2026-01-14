@@ -177,6 +177,93 @@ function validateGitPush(command: string, expectedBranch: string, allowForce: bo
   throw new Error(`Blocked: git push refspec must target the current PR branch (${expectedBranch})`);
 }
 
+function isAllowedPrArg(arg: string, expectedPrNumber: string): boolean {
+  return arg === expectedPrNumber || arg === "$PI_PR_NUMBER" || arg === "${PI_PR_NUMBER}";
+}
+
+function isAllowedRepoArg(arg: string, owner: string, repo: string): boolean {
+  const expected = `${owner}/${repo}`;
+  return (
+    arg === expected ||
+    arg === "$PI_GH_OWNER/$PI_GH_REPO" ||
+    arg === "${PI_GH_OWNER}/${PI_GH_REPO}" ||
+    arg === "${PI_GH_OWNER}/$PI_GH_REPO" ||
+    arg === "$PI_GH_OWNER/${PI_GH_REPO}" ||
+    arg === "$PI_GH_OWNER/${PI_GH_REPO}" // tolerated
+  );
+}
+
+function validateGh(command: string, owner: string, repo: string, prNumber: string) {
+  const args = splitArgs(command);
+  if (args.length === 0 || args[0] !== "gh") return;
+
+  // Hard block: gh api is too powerful unless we also endpoint-allowlist it.
+  if (args[1] === "api") {
+    throw new Error("Blocked: gh api is not allowed (use the dedicated GitHub tools instead)");
+  }
+
+  // Validate -R/--repo if present.
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if ((a === "--repo" || a === "-R") && i + 1 < args.length) {
+      const r = args[i + 1];
+      if (!isAllowedRepoArg(r, owner, repo)) {
+        throw new Error(`Blocked: gh --repo must be ${owner}/${repo}`);
+      }
+      i++;
+    }
+  }
+
+  if (args[1] !== "pr") {
+    throw new Error("Blocked: only 'gh pr' commands are allowed");
+  }
+
+  const sub = args[2];
+  if (sub !== "view" && sub !== "diff" && sub !== "comment") {
+    throw new Error("Blocked: only 'gh pr view|diff|comment' are allowed");
+  }
+
+  const prArg = args[3];
+  if (!prArg) throw new Error("Blocked: gh pr commands must include the PR number");
+  if (!isAllowedPrArg(prArg, prNumber)) {
+    throw new Error(`Blocked: gh pr must target PR #${prNumber}`);
+  }
+
+  if (sub === "comment") {
+    // Prevent file exfil via --body-file.
+    let hasBody = false;
+    for (let i = 4; i < args.length; i++) {
+      const a = args[i];
+      if (a === "--body") {
+        hasBody = true;
+        i++; // consume value
+        continue;
+      }
+      if (a === "--body-file" || a === "--template" || a === "--editor" || a === "--edit-last") {
+        throw new Error(`Blocked: gh pr comment flag not allowed: ${a} (use --body)`);
+      }
+    }
+    if (!hasBody) {
+      throw new Error("Blocked: gh pr comment must use --body (non-interactive)");
+    }
+  }
+}
+
+function buildBashEnv(command: string): NodeJS.ProcessEnv {
+  const ghToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  const out = scrubEnv(process.env);
+
+  if (command.startsWith("gh ")) {
+    if (!ghToken) throw new Error("Blocked: gh requires GITHUB_TOKEN");
+    out.GH_TOKEN = ghToken;
+    out.GH_PROMPT_DISABLED = "true";
+    out.GH_PAGER = "cat";
+    out.PAGER = "cat";
+  }
+
+  return out;
+}
+
 function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Defense-in-depth: child process doesn't need LLM keys or GitHub token.
   const out: NodeJS.ProcessEnv = { ...env };
@@ -197,7 +284,7 @@ async function runRestrictedBash(command: string, cwd: string, timeoutSeconds?: 
   return new Promise<{ exitCode: number; output: string; truncated: boolean }>((resolve, reject) => {
     const child = spawn("bash", ["-lc", command], {
       cwd,
-      env: scrubEnv(process.env),
+      env: buildBashEnv(command),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -449,6 +536,16 @@ export default function (pi: ExtensionAPI) {
         validateGitPush(command, expectedBranch, allowForce);
       }
 
+      if (command.startsWith("gh ") || command === "gh") {
+        const owner = process.env.PI_GH_OWNER || "";
+        const repo = process.env.PI_GH_REPO || "";
+        const prNumber = process.env.PI_PR_NUMBER || "";
+        if (!owner || !repo || !prNumber) {
+          throw new Error("Blocked: PI_GH_OWNER/PI_GH_REPO/PI_PR_NUMBER are required for gh validation");
+        }
+        validateGh(command, owner, repo, prNumber);
+      }
+
       const ok = allowlist.some((p) => matchWildcard(p, command));
       if (!ok) {
         throw new Error(`Blocked: bash command not in allowlist: ${command}`);
@@ -490,6 +587,20 @@ export default function (pi: ExtensionAPI) {
           validateGitPush(command, expectedBranch, allowForce);
         } catch (e: any) {
           return { block: true, reason: e?.message || "Blocked: invalid git push" };
+        }
+      }
+
+      if (command.startsWith("gh ") || command === "gh") {
+        const owner = process.env.PI_GH_OWNER || "";
+        const repo = process.env.PI_GH_REPO || "";
+        const prNumber = process.env.PI_PR_NUMBER || "";
+        if (!owner || !repo || !prNumber) {
+          return { block: true, reason: "Blocked: PI_GH_OWNER/PI_GH_REPO/PI_PR_NUMBER are required for gh validation" };
+        }
+        try {
+          validateGh(command, owner, repo, prNumber);
+        } catch (e: any) {
+          return { block: true, reason: e?.message || "Blocked: invalid gh command" };
         }
       }
 

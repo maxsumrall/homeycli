@@ -53,6 +53,11 @@ jobs:
             npm test
             npm run lint
             npm run format
+
+            # GitHub CLI (limited)
+            gh pr view *
+            gh pr diff *
+            gh pr comment *
           pi-version: latest
           provider: openrouter
           model: minimax/minimax-m2.1
