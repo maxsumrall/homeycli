@@ -333,7 +333,9 @@ function appendStepSummary(markdown) {
 
 async function main() {
   const token = mustEnv("GITHUB_TOKEN");
-  const actionDir = mustEnv("GITHUB_ACTION_PATH");
+  // GitHub does not reliably set GITHUB_ACTION_PATH for node actions.
+  // Use it when available, otherwise fall back to this file's directory.
+  const actionDir = process.env.GITHUB_ACTION_PATH || __dirname;
 
   // Inputs
   const modeInput = getInput("mode", "auto");
