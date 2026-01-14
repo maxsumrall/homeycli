@@ -41,9 +41,16 @@ function fail(msg) {
 }
 
 function getInput(name, def) {
-  const key = `INPUT_${name.toUpperCase().replace(/-/g, "_")}`;
-  const v = process.env[key];
-  return v !== undefined && v !== "" ? v : def;
+  // GitHub Actions provides inputs as environment variables.
+  // @actions/core replaces spaces with underscores but keeps hyphens.
+  // Some tooling may also provide an underscore-variant, so we accept both.
+  const base = name.toUpperCase().replace(/ /g, "_");
+  const keys = [`INPUT_${base}`, `INPUT_${base.replace(/-/g, "_")}`];
+  for (const key of keys) {
+    const v = process.env[key];
+    if (v !== undefined && v !== "") return v;
+  }
+  return def;
 }
 
 function mustEnv(name) {
